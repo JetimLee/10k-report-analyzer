@@ -6,7 +6,7 @@ An end-to-end data pipeline that ingests SEC 10-K filings, extracts financial da
 ## Project Layout
 ```
 Dockerfile                              # Python 3.10 + Poetry + Bruin CLI image
-docker-compose.yml                      # dashboard service + one-shot pipeline service
+docker-compose.yml                      # dashboard + pipeline + seed-universe services
 .bruin.yml                              # Bruin project config (DuckDB connection)
 pipeline.yml                            # Pipeline definition (schedule, connections)
 pyproject.toml / poetry.lock            # Pinned Python deps
@@ -31,11 +31,19 @@ scripts/
 
 ## DAG / Dependency Order
 ```
+config.selected_tickers  (written by dashboard; seeded with defaults on first run)
+  │
+  ▼
 sec_filings
   ├── financial_statements → financial_metrics → financial_ratios
   │                                            → yoy_trends
   └── filing_text_sections ──────────────────→ text_sentiment
+                                             └─► business_embeddings
 ```
+
+Out-of-band (not part of `bruin run .`):
+`scripts/seed_universe_embeddings.py` → `analytics.sec_universe_embeddings`
+(triggered from the dashboard's "Peer universe" expander or CLI)
 
 ## How to Run
 
@@ -117,3 +125,4 @@ con.close()
 - SEC EDGAR may rate-limit aggressively. If you see 403 errors, wait a minute and retry.
 - The `User-Agent` header in ingest scripts must identify your application per SEC policy. Set `SEC_USER_AGENT="YourApp your-email@example.com"` in `.env` (or export it before running locally). Falls back to a generic placeholder if unset — don't rely on the placeholder for real ingestion, SEC may block it.
 - **`IsADirectoryError: .sic_cache.json`**: a prior docker-compose config bind-mounted this file before it existed, causing Docker to create it as an empty directory. Fix: `docker compose down && rm -rf .sic_cache.json && docker compose up`. Current `docker-compose.yml` bind-mounts the whole project directory instead to avoid this class of bug.
+- **`duckdb.IOException: Conflicting lock is held`**: another process (usually a leftover bruin subprocess from a prior pipeline run) holds `ten_k.db`. `write_selected_tickers()` in `dashboard.py` retries for ~30s via `_connect_writable()`. If it still fails, find the offender with `ps aux | grep python` and kill it.

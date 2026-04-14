@@ -174,9 +174,21 @@ def ingested_tickers():
         return []
 
 
+def _connect_writable(retries=15, delay=2):
+    """Open a writable DuckDB connection, retrying if another process holds the lock."""
+    for attempt in range(retries):
+        try:
+            return duckdb.connect(DB_PATH)
+        except duckdb.IOException:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise
+
+
 def write_selected_tickers(tickers):
     """Write the selected ticker list to DuckDB (config.selected_tickers)."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_writable()
     try:
         con.execute("CREATE SCHEMA IF NOT EXISTS config")
         con.execute("""

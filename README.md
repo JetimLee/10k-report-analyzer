@@ -18,36 +18,43 @@ Financial analysts, investors, and equity researchers spend enormous amounts of 
 ## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                            EXTERNAL SOURCES                               │
-│   SEC EDGAR (filings, XBRL, submissions API)     Wikipedia (S&P 500)      │
-└──────────────────────────────┬────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                            EXTERNAL SOURCES                                │
+│  SEC EDGAR (filings, XBRL, submissions, ticker map)                        │
+│  Wikipedia (S&P 500, NASDAQ-100 constituent lists)                         │
+└──────────────────────────────┬─────────────────────────────────────────────┘
                                │ HTTP (rate-limited 10 req/s)
                                ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                           BRUIN PIPELINE                                  │
-│                                                                           │
-│  ┌────────────────── INGEST (Python) ──────────────────┐                  │
-│  │ raw.sec_filings          Filing metadata            │                  │
-│  │ raw.financial_statements XBRL facts (IS/BS/CF)      │                  │
-│  │ raw.filing_text_sections Item 1 / MD&A / Risk Facts │                  │
-│  └───────────────────────┬──────────────────────────────┘                 │
-│                          ▼                                                │
-│  ┌────────────────── STAGING (SQL) ─────────────────────┐                 │
-│  │ staging.financial_metrics  Dedupe + pivot → wide     │                 │
-│  │                            1 row per company-year    │                 │
-│  └───────────────────────┬──────────────────────────────┘                 │
-│                          ▼                                                │
-│  ┌────────────────── ANALYTICS (SQL + Python) ─────────────────────┐      │
-│  │ analytics.financial_ratios     Profitability, liquidity, lev.   │      │
-│  │ analytics.yoy_trends           YoY growth + DuPont ROE          │      │
-│  │ analytics.text_sentiment       Loughran-McDonald scoring        │      │
-│  │ analytics.business_embeddings  MiniLM vectors of Item 1         │      │
-│  └───────────────────────┬──────────────────────────────────────────┘     │
-│                          ▼                                                │
-│                  Data-quality checks                                      │
-│                  (not_null, unique, accepted_values, custom)              │
-└──────────────────────────┬────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                            BRUIN PIPELINE                                  │
+│                                                                            │
+│  ┌────────── CONFIG (DuckDB) ──────────┐                                   │
+│  │ config.selected_tickers             │ ← written by dashboard's         │
+│  │  (source of truth for which         │   "Generate Report" button       │
+│  │   companies the pipeline ingests)   │                                  │
+│  └─────────────────┬───────────────────┘                                   │
+│                    ▼                                                       │
+│  ┌────────────────── INGEST (Python) ──────────────────┐                   │
+│  │ raw.sec_filings          Filing metadata            │                   │
+│  │ raw.financial_statements XBRL facts (IS/BS/CF)      │                   │
+│  │ raw.filing_text_sections Item 1 / MD&A / Risk Facts │                   │
+│  └───────────────────────┬─────────────────────────────┘                   │
+│                          ▼                                                 │
+│  ┌────────────────── STAGING (SQL) ─────────────────────┐                  │
+│  │ staging.financial_metrics  Dedupe + pivot → wide     │                  │
+│  │                            1 row per company-year    │                  │
+│  └───────────────────────┬──────────────────────────────┘                  │
+│                          ▼                                                 │
+│  ┌────────────────── ANALYTICS (SQL + Python) ─────────────────────┐       │
+│  │ analytics.financial_ratios     Profitability, liquidity, lev.   │       │
+│  │ analytics.yoy_trends           YoY growth + DuPont ROE          │       │
+│  │ analytics.text_sentiment       Loughran-McDonald scoring        │       │
+│  │ analytics.business_embeddings  MiniLM vectors of Item 1         │       │
+│  └───────────────────────┬──────────────────────────────────────────┘      │
+│                          ▼                                                 │
+│                  Data-quality checks                                       │
+│                  (not_null, unique, accepted_values, custom SQL)           │
+└──────────────────────────┬─────────────────────────────────────────────────┘
                            ▼
               ┌───────────────────────────┐
               │   DuckDB (ten_k.db)       │
@@ -56,18 +63,24 @@ Financial analysts, investors, and equity researchers spend enormous amounts of 
                              │
       ┌──────────────────────┼──────────────────────────┐
       ▼                      ▼                          ▼
-┌───────────────┐   ┌───────────────────┐    ┌────────────────────────────┐
-│  STREAMLIT    │   │ SEED SCRIPT       │    │  analytics.sec_universe    │
-│  DASHBOARD    │◄──┤ scripts/seed_     │───►│  _embeddings (500+ pre-    │
-│  (dashboard.py)│  │ universe_embed..  │    │  computed S&P 500 peers)   │
-│               │   │ MiniLM embeddings │    └────────────────────────────┘
-│ • Charts      │   └───────────────────┘
-│ • Peer search │
-│ • Kick off    │   All services run in Docker (docker-compose.yml):
-│   pipeline    │     - dashboard (Streamlit, port 8501)
-│ • Kick off    │     - pipeline  (one-shot bruin run .)
-│   seed        │     - seed-universe (one-shot embedding seeder)
-└───────────────┘
+┌────────────────┐  ┌───────────────────┐   ┌─────────────────────────────┐
+│   STREAMLIT    │  │  SEED SCRIPT      │   │ analytics.sec_universe_     │
+│   DASHBOARD    │◄─┤ scripts/seed_     │──►│ embeddings (S&P 500 /       │
+│  (dashboard.py)│  │ universe_embed..  │   │ NASDAQ-100 / combined,      │
+│                │  │ MiniLM embeddings │   │ precomputed peer vectors)   │
+│ • Category &   │  └─────────┬─────────┘   └─────────────────────────────┘
+│   search-based │            │
+│   ticker picker│            │ triggered from dashboard "Peer universe"
+│ • Charts +     │            │ expander (index + scope chosen in UI)
+│   story-mode   │
+│   captions     │   All services run in Docker (docker-compose.yml):
+│ • Peer search  │     - dashboard      (Streamlit, port 8501)
+│   (embeddings  │     - pipeline       (one-shot bruin run .)
+│   + SIC)       │     - seed-universe  (one-shot embedding seeder)
+│ • Kick off     │
+│   pipeline &   │
+│   seeding      │
+└────────────────┘
 ```
 
 ### Design choices
@@ -230,23 +243,27 @@ Dependencies are pinned to the exact versions validated during development:
 ```
 ten-k-analyzer/
 ├── Dockerfile                              # Python 3.10 + Poetry + Bruin
-├── docker-compose.yml                      # dashboard + one-shot pipeline services
-├── .bruin.yml                              # Bruin project config
+├── docker-compose.yml                      # dashboard + pipeline + seed-universe services
+├── .bruin.yml                              # Bruin project config (DuckDB connection)
 ├── pipeline.yml                            # Pipeline definition
 ├── pyproject.toml                          # Pinned Python deps
 ├── poetry.lock
 ├── dashboard.py                            # Streamlit app
+├── scripts/
+│   └── seed_universe_embeddings.py         # One-shot: embed Item 1 for S&P 500 / NASDAQ-100
 ├── assets/
 │   ├── ingest/
 │   │   ├── sec_filings.py                  # Pull filing metadata from EDGAR
+│   │   │                                   # (reads config.selected_tickers)
 │   │   ├── financial_statements.py         # Extract XBRL financial data
-│   │   └── filing_text_sections.py         # Extract MD&A + Risk Factors text
+│   │   └── filing_text_sections.py         # Extract Item 1 / MD&A / Risk Factors
 │   ├── staging/
 │   │   └── financial_metrics.sql           # Clean, dedupe, pivot to wide format
 │   └── analytics/
 │       ├── financial_ratios.sql            # Compute all financial ratios
 │       ├── yoy_trends.sql                  # Year-over-year trend analysis
-│       └── text_sentiment.py               # Loughran-McDonald sentiment scoring
+│       ├── text_sentiment.py               # Loughran-McDonald sentiment scoring
+│       └── business_embeddings.py          # MiniLM vectors of Item 1 for ingested tickers
 └── README.md
 ```
 
@@ -255,3 +272,5 @@ ten-k-analyzer/
 - **`IsADirectoryError: .sic_cache.json`** — an older compose config bind-mounted this file before it existed, so Docker created it as a directory. Fix: `docker compose down && rm -rf .sic_cache.json && docker compose up`.
 - **SEC 403 errors** — rate limiting. Wait a minute and retry; all ingest scripts already sleep 0.15s between requests.
 - **Port 8501 in use** — another Streamlit is already running. Stop it, or edit the port mapping in `docker-compose.yml`.
+- **`duckdb.IOException: Conflicting lock is held`** — another process is holding `ten_k.db` (usually a leftover bruin subprocess from a prior pipeline run). `write_selected_tickers` retries for ~30s, but if it keeps failing, find the offender with `ps aux | grep python` and kill it.
+- **Empty ticker list on first run** — the pipeline seeds `config.selected_tickers` with a default set (AAPL, MSFT, GOOGL, AMZN, META) the first time it runs. Manage the list afterwards from the dashboard.
