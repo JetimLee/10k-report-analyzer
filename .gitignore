@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# DuckDB
+*.db
+*.db.wal
+
+# Environment
+.env
+.python-version
+
+# Local caches & logs
+.sic_cache.json
+logs/
+.ruff_cache/

@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "ten-k-analyzer"
+version = "0.1.0"
+description = "Data pipeline for SEC 10-K filing analysis with Bruin and DuckDB"
+authors = ["Gavin Coulson"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+duckdb = "1.5.2"
+requests = "2.33.1"
+streamlit = "1.56.0"
+plotly = "6.7.0"
+pandas = "2.3.3"
+numpy = "2.2.6"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "0.11.13"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
