@@ -205,10 +205,12 @@ poetry run streamlit run dashboard.py
 
 ## Dashboard Features (for non-technical stakeholders)
 
+- **Tab navigation** — the main page is organized into tabs at the top (Overview, Deep Dive, Performance, Solvency, Sentiment, Data); the active tab is highlighted so you always know where you are. Sidebar tools (ticker picker, Generate Report, peer universe seeding) stay pinned across tabs.
 - **Full SEC ticker search** — the sidebar multiselect is backed by `company_tickers.json`, so any SEC-listed company can be added.
 - **Pick by category** — curated industry buckets (Big Tech, Banking, Defense & Aerospace, Pharma, Energy, Retail, Automotive, Semiconductors, Cloud & SaaS, Streaming, Airlines, Telecom, Consumer Staples, Insurance, Payments & Fintech) for one-click selection of well-known tickers.
 - **Generate Report** — sits directly under the Companies box. Writes the current ticker selection to the `config.selected_tickers` DuckDB table and runs the full Bruin pipeline in-process. Shows a progress bar + current-asset label; full log available behind a Developer-mode toggle.
 - **Peer universe seeding** — a sidebar panel lets stakeholders kick off a one-time embedding seed with live ETA and per-ticker progress. Pick an index (S&P 500 / NASDAQ-100 / combined ~570) and a scope (20 / 100 / full). The combined index catches names like SNOW / MDB that aren't in the S&P 500. No CLI needed.
+- **Company Deep Dive** — single-company view built for accountants and analysts: Piotroski-inspired fundamental health scorecard (8 binary checks), income-statement waterfall + common-size table, balance-sheet composition (current vs non-current assets / liabilities + equity), cash-flow quality (OCF vs net income, FCF margin), working-capital efficiency (DSO, DIO, asset turnover), and a rule-based red-flag checklist (earnings quality, liquidity, leverage, receivables/inventory buildup, margin contraction).
 - **Similar companies** — two peer-discovery modes:
   - *By business description* (primary): MiniLM sentence embeddings of each 10-K Item 1, ranked by cosine similarity. Pulls from both user-ingested tickers and the precomputed universe. The top-N slider (10–100) widens the list — cosine similarity is symmetric but a fixed cutoff isn't, so a ticker in a dense cluster may have peers that sit just outside its top 15.
   - *By SIC code* (fallback): coarse industry filter; useful for discovering small-cap tickers outside the embedding universe.

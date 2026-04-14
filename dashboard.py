@@ -640,273 +640,558 @@ if not available:
 placeholders = ", ".join(f"'{t}'" for t in available)
 
 # --- Overview ---
-st.header("Financial Overview")
-st.caption(
-    "Top-level snapshot across the companies you selected: how many we're tracking, "
-    "the most recent fiscal year on file, and combined revenue for that year."
+
+(tab_overview, tab_deep, tab_perf, tab_solv, tab_sent, tab_data) = st.tabs(
+    ["Overview", "Deep Dive", "Performance", "Solvency", "Sentiment", "Data"]
 )
 
-latest = query(f"""
-    SELECT ticker, fiscal_year, revenue, net_income,
-           gross_margin, operating_margin, net_profit_margin,
-           return_on_equity, return_on_assets,
-           current_ratio, debt_to_equity, free_cash_flow
-    FROM analytics.financial_ratios
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-    ORDER BY fiscal_year DESC
-""")
-
-latest_year = latest.groupby("ticker").first().reset_index()
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    st.metric("Companies Tracked", len(available))
-with col2:
-    if not latest_year.empty and latest_year["fiscal_year"].notna().any():
-        st.metric("Latest Fiscal Year", int(latest_year["fiscal_year"].max()))
-with col3:
-    total_rev = latest_year["revenue"].sum(skipna=True)
-    if total_rev and total_rev > 0:
-        st.metric("Combined Revenue", f"${total_rev / 1e9:.0f}B")
-
-# --- Revenue & Net Income ---
-st.header("Revenue & Net Income")
-st.caption(
-    "The top-line (revenue) tells you scale; the bottom-line (net income) tells you "
-    "how much actually makes it through after costs, interest, and taxes. Divergence "
-    "between the two lines usually flags margin pressure or one-time charges."
-)
-
-rev_data = query(f"""
-    SELECT ticker, fiscal_year, revenue, net_income
-    FROM analytics.financial_ratios
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-      AND revenue IS NOT NULL AND revenue > 0
-    ORDER BY fiscal_year
-""")
-
-col1, col2 = st.columns(2)
-with col1:
-    fig = px.line(
-        rev_data, x="fiscal_year", y="revenue", color="ticker",
-        title="Revenue Over Time", labels={"revenue": "Revenue ($)", "fiscal_year": "Year"},
-        markers=True,
+with tab_overview:
+    st.header("Financial Overview")
+    st.caption(
+        "Top-level snapshot across the companies you selected: how many we're tracking, "
+        "the most recent fiscal year on file, and combined revenue for that year."
     )
-    st.plotly_chart(fig, use_container_width=True)
 
-with col2:
-    fig = px.line(
-        rev_data.dropna(subset=["net_income"]),
-        x="fiscal_year", y="net_income", color="ticker",
-        title="Net Income Over Time", labels={"net_income": "Net Income ($)", "fiscal_year": "Year"},
-        markers=True,
+    latest = query(f"""
+        SELECT ticker, fiscal_year, revenue, net_income,
+               gross_margin, operating_margin, net_profit_margin,
+               return_on_equity, return_on_assets,
+               current_ratio, debt_to_equity, free_cash_flow
+        FROM analytics.financial_ratios
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year DESC
+    """)
+
+    latest_year = latest.groupby("ticker").first().reset_index()
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Companies Tracked", len(available))
+    with col2:
+        if not latest_year.empty and latest_year["fiscal_year"].notna().any():
+            st.metric("Latest Fiscal Year", int(latest_year["fiscal_year"].max()))
+    with col3:
+        total_rev = latest_year["revenue"].sum(skipna=True)
+        if total_rev and total_rev > 0:
+            st.metric("Combined Revenue", f"${total_rev / 1e9:.0f}B")
+
+
+with tab_deep:
+    # --- Company Deep Dive ---
+    st.caption(
+        "Analyst-grade single-company view: health scorecard, income-statement walk, "
+        "balance-sheet composition, cash-flow quality, working-capital efficiency, and "
+        "a red-flag checklist drawn straight from the 10-K numbers."
     )
-    st.plotly_chart(fig, use_container_width=True)
 
-# --- Profitability Margins ---
-st.header("Profitability Margins")
-st.caption(
-    "Margins show how much of each revenue dollar survives at each layer of the income statement — "
-    "gross (after COGS), operating (after SG&A/R&D), and net (after everything). "
-    "Rising margins = pricing power or operating leverage; falling margins = cost pressure or mix shift."
-)
-
-margins = query(f"""
-    SELECT ticker, fiscal_year, gross_margin, operating_margin, net_profit_margin
-    FROM analytics.financial_ratios
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-    ORDER BY fiscal_year
-""")
-
-margin_type = st.selectbox("Margin", ["operating_margin", "net_profit_margin", "gross_margin"])
-margin_plot = clip_outliers(margins.dropna(subset=[margin_type]), margin_type)
-fig = px.line(
-    margin_plot, x="fiscal_year", y=margin_type, color="ticker",
-    title=f"{margin_type.replace('_', ' ').title()} Over Time",
-    labels={margin_type: "Ratio", "fiscal_year": "Year"},
-    markers=True,
-)
-fig.update_layout(yaxis_tickformat=".1%")
-st.plotly_chart(fig, use_container_width=True)
-
-# --- YoY Growth ---
-st.header("Year-over-Year Growth")
-st.caption(
-    "Growth rates let you compare companies of very different sizes on the same axis. "
-    "Watch for revenue growth outpacing net-income growth (margin erosion) or the reverse "
-    "(operating leverage kicking in)."
-)
-
-yoy = query(f"""
-    SELECT ticker, fiscal_year, revenue_growth, net_income_growth, operating_income_growth
-    FROM analytics.yoy_trends
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-    ORDER BY fiscal_year
-""")
-yoy = clip_outliers(clip_outliers(yoy, "revenue_growth"), "net_income_growth")
-
-col1, col2 = st.columns(2)
-with col1:
-    fig = px.bar(
-        yoy.dropna(subset=["revenue_growth"]),
-        x="fiscal_year", y="revenue_growth", color="ticker",
-        barmode="group", title="Revenue Growth (YoY)",
-        labels={"revenue_growth": "Growth Rate", "fiscal_year": "Year"},
+    deep_ticker = st.selectbox(
+        "Company to analyze", available, key="deep_dive_ticker",
+        format_func=lambda t: f"{t} — {label_map.get(t, t)}",
     )
-    fig.update_layout(yaxis_tickformat=".1%")
-    st.plotly_chart(fig, use_container_width=True)
 
-with col2:
-    fig = px.bar(
-        yoy.dropna(subset=["net_income_growth"]),
-        x="fiscal_year", y="net_income_growth", color="ticker",
-        barmode="group", title="Net Income Growth (YoY)",
-        labels={"net_income_growth": "Growth Rate", "fiscal_year": "Year"},
+    stmt = query(f"""
+        SELECT * FROM staging.financial_metrics
+        WHERE ticker = '{deep_ticker}' AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year DESC
+    """)
+    rat = query(f"""
+        SELECT * FROM analytics.financial_ratios
+        WHERE ticker = '{deep_ticker}' AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year DESC
+    """)
+
+    if stmt.empty or rat.empty:
+        st.info(f"No financial-statement data for {deep_ticker} yet.")
+    else:
+        cur = stmt.iloc[0]
+        cur_r = rat.iloc[0]
+        prior = stmt.iloc[1] if len(stmt) > 1 else None
+        prior_r = rat.iloc[1] if len(rat) > 1 else None
+        fy = int(cur["fiscal_year"])
+
+        def _safe(v):
+            try:
+                return float(v) if v is not None and not pd.isna(v) else None
+            except Exception:
+                return None
+
+        def _fmt_money(v):
+            v = _safe(v)
+            if v is None:
+                return "—"
+            absv = abs(v)
+            if absv >= 1e9:
+                return f"${v / 1e9:,.2f}B"
+            if absv >= 1e6:
+                return f"${v / 1e6:,.1f}M"
+            return f"${v:,.0f}"
+
+        def _fmt_pct(v, decimals=1):
+            v = _safe(v)
+            return f"{v * 100:.{decimals}f}%" if v is not None else "—"
+
+        def _fmt_x(v, decimals=2):
+            v = _safe(v)
+            return f"{v:.{decimals}f}x" if v is not None else "—"
+
+        # --- KPI strip ---
+        st.subheader(f"{deep_ticker} — FY{fy} Snapshot")
+        k1, k2, k3, k4, k5 = st.columns(5)
+        k1.metric("Revenue", _fmt_money(cur["revenue"]))
+        k2.metric("Net Income", _fmt_money(cur["net_income"]))
+        fcf = _safe(cur_r.get("free_cash_flow"))
+        k3.metric("Free Cash Flow", _fmt_money(fcf))
+        k4.metric("ROE", _fmt_pct(cur_r.get("return_on_equity")))
+        k5.metric("Current Ratio", _fmt_x(cur_r.get("current_ratio")))
+
+        # --- Fundamental health scorecard (Piotroski-inspired, 8 checks) ---
+        st.subheader("Fundamental Health Scorecard")
+        st.caption(
+            "Eight binary checks inspired by Piotroski's F-score. Each check earns 1 point; "
+            "6+ is strong, 3–5 is mixed, ≤2 deserves scrutiny."
+        )
+
+        ni = _safe(cur["net_income"])
+        ocf = _safe(cur["operating_cash_flow"])
+        roa_now = _safe(cur_r.get("return_on_assets"))
+        roa_prev = _safe(prior_r.get("return_on_assets")) if prior_r is not None else None
+        da_now = _safe(cur_r.get("debt_to_assets"))
+        da_prev = _safe(prior_r.get("debt_to_assets")) if prior_r is not None else None
+        cr_now = _safe(cur_r.get("current_ratio"))
+        cr_prev = _safe(prior_r.get("current_ratio")) if prior_r is not None else None
+        gm_now = _safe(cur_r.get("gross_margin"))
+        gm_prev = _safe(prior_r.get("gross_margin")) if prior_r is not None else None
+        at_now = _safe(cur_r.get("asset_turnover"))
+        at_prev = _safe(prior_r.get("asset_turnover")) if prior_r is not None else None
+
+        checks = [
+            ("Profitable", "Net income > 0", ni is not None and ni > 0),
+            ("Cash-generative", "Operating cash flow > 0", ocf is not None and ocf > 0),
+            ("Quality of earnings", "Operating CF ≥ Net Income", (ocf is not None and ni is not None and ocf >= ni)),
+            ("Improving ROA", "ROA higher than prior year", (roa_now is not None and roa_prev is not None and roa_now > roa_prev)),
+            ("Deleveraging", "Debt/assets lower than prior year", (da_now is not None and da_prev is not None and da_now < da_prev)),
+            ("Liquidity trending up", "Current ratio higher than prior year", (cr_now is not None and cr_prev is not None and cr_now > cr_prev)),
+            ("Margin expansion", "Gross margin higher than prior year", (gm_now is not None and gm_prev is not None and gm_now > gm_prev)),
+            ("Asset efficiency up", "Asset turnover higher than prior year", (at_now is not None and at_prev is not None and at_now > at_prev)),
+        ]
+        score = sum(1 for _, _, ok in checks if ok)
+        grade = "Strong" if score >= 6 else ("Mixed" if score >= 3 else "Weak")
+        st.metric("Score", f"{score} / 8", delta=grade)
+
+        check_df = pd.DataFrame(
+            [{"Check": name, "Criterion": desc, "Pass": "✓" if ok else "✗"} for name, desc, ok in checks]
+        )
+        st.dataframe(check_df, use_container_width=True, hide_index=True)
+
+        # --- Income statement walk (waterfall) ---
+        st.subheader("Income Statement Walk")
+        st.caption(
+            "Walks from top-line revenue down to net income, showing where each dollar is absorbed: "
+            "cost of goods, operating expenses, and everything below the operating line (interest, tax, other)."
+        )
+        revenue = _safe(cur["revenue"])
+        cogs = _safe(cur["cogs"])
+        gross = _safe(cur["gross_profit"])
+        op = _safe(cur["operating_income"])
+
+        if revenue and gross is not None and op is not None and ni is not None:
+            opex = gross - op  # SG&A + R&D + D&A ≈ gross_profit - operating_income
+            below_line = op - ni  # interest + tax + other
+            fig = go.Figure(go.Waterfall(
+                measure=["absolute", "relative", "total", "relative", "total", "relative", "total"],
+                x=["Revenue", "COGS", "Gross Profit", "Operating Exp.", "Operating Income", "Int/Tax/Other", "Net Income"],
+                y=[revenue, -(cogs or 0), gross, -opex, op, -below_line, ni],
+                connector={"line": {"color": "rgb(150,150,150)"}},
+            ))
+            fig.update_layout(title=f"{deep_ticker} FY{fy} — Revenue → Net Income", showlegend=False)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Common-size income statement
+            st.caption("**Common-size** (every line as a % of revenue) makes cost structure comparable across years and peers.")
+            cs = pd.DataFrame({
+                "Line item": ["Revenue", "COGS", "Gross Profit", "Operating Expenses", "Operating Income", "Net Income"],
+                "$ (current)": [_fmt_money(revenue), _fmt_money(cogs), _fmt_money(gross), _fmt_money(opex), _fmt_money(op), _fmt_money(ni)],
+                "% of revenue": [
+                    "100.0%",
+                    _fmt_pct((cogs or 0) / revenue) if revenue else "—",
+                    _fmt_pct(gross / revenue) if revenue else "—",
+                    _fmt_pct(opex / revenue) if revenue else "—",
+                    _fmt_pct(op / revenue) if revenue else "—",
+                    _fmt_pct(ni / revenue) if revenue else "—",
+                ],
+            })
+            st.dataframe(cs, use_container_width=True, hide_index=True)
+        else:
+            st.info("Not enough income-statement detail for a waterfall view.")
+
+        # --- Balance sheet composition ---
+        st.subheader("Balance Sheet Composition")
+        st.caption(
+            "Assets = Liabilities + Equity. Current vs. non-current split shows how much is tied up "
+            "short-term (working capital) vs long-term (fixed assets, long-term debt)."
+        )
+        ta = _safe(cur["total_assets"])
+        ca = _safe(cur["current_assets"])
+        tl = _safe(cur["total_liabilities"])
+        cl = _safe(cur["current_liabilities"])
+        eq = _safe(cur["stockholders_equity"])
+        ltd = _safe(cur["long_term_debt"])
+
+        if ta and tl is not None and eq is not None:
+            nca = ta - (ca or 0)
+            ncl = max((tl or 0) - (cl or 0), 0)
+            bs_df = pd.DataFrame([
+                {"Side": "Assets", "Bucket": "Current assets", "Amount": ca or 0},
+                {"Side": "Assets", "Bucket": "Non-current assets", "Amount": nca},
+                {"Side": "Liabilities + Equity", "Bucket": "Current liabilities", "Amount": cl or 0},
+                {"Side": "Liabilities + Equity", "Bucket": "Non-current liabilities", "Amount": ncl},
+                {"Side": "Liabilities + Equity", "Bucket": "Stockholders' equity", "Amount": eq},
+            ])
+            fig = px.bar(
+                bs_df, x="Side", y="Amount", color="Bucket", text_auto=".2s",
+                title=f"{deep_ticker} FY{fy} — Balance Sheet ($)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total Assets", _fmt_money(ta))
+            c2.metric("Total Liabilities", _fmt_money(tl))
+            c3.metric("Equity", _fmt_money(eq))
+
+            c4, c5, c6 = st.columns(3)
+            wc = (ca or 0) - (cl or 0)
+            c4.metric("Working Capital", _fmt_money(wc))
+            c5.metric("Long-term Debt", _fmt_money(ltd))
+            c6.metric("Debt / Equity", _fmt_x(cur_r.get("debt_to_equity")))
+        else:
+            st.info("Balance sheet items incomplete for this fiscal year.")
+
+        # --- Cash flow quality ---
+        st.subheader("Cash-Flow Quality")
+        st.caption(
+            "A company can report positive net income while burning cash — watch for OCF lagging net income. "
+            "The OCF-to-NI ratio is the single best earnings-quality tell."
+        )
+        capex = _safe(cur["capex"])
+        cf_df = pd.DataFrame([
+            {"Metric": "Operating Cash Flow", "Value": ocf or 0},
+            {"Metric": "CapEx", "Value": -(abs(capex) if capex else 0)},
+            {"Metric": "Free Cash Flow", "Value": fcf or 0},
+            {"Metric": "Net Income", "Value": ni or 0},
+        ])
+        fig = px.bar(cf_df, x="Metric", y="Value", text_auto=".2s", title=f"{deep_ticker} FY{fy} — Cash Flow vs Earnings")
+        st.plotly_chart(fig, use_container_width=True)
+
+        cfi = _safe(cur_r.get("cash_flow_to_income"))
+        q1, q2 = st.columns(2)
+        q1.metric("OCF / Net Income", _fmt_x(cfi), help="≥1.0 is the healthy zone. <0.8 for multiple years is a red flag.")
+        q2.metric("FCF Margin", _fmt_pct((fcf / revenue) if (fcf is not None and revenue) else None))
+
+        # --- Working-capital efficiency ---
+        st.subheader("Working-Capital Efficiency")
+        st.caption(
+            "**DSO** = how many days of sales are sitting in receivables. **DIO** = how many days of cost are "
+            "sitting in inventory. Both rising while revenue is flat = cash getting stuck on the balance sheet."
+        )
+        dso = _safe(cur_r.get("days_sales_outstanding"))
+        dio = _safe(cur_r.get("days_inventory_outstanding"))
+        w1, w2, w3 = st.columns(3)
+        w1.metric("Days Sales Outstanding", f"{dso:.0f} days" if dso is not None else "—")
+        w2.metric("Days Inventory Outstanding", f"{dio:.0f} days" if dio is not None else "—")
+        w3.metric("Asset Turnover", _fmt_x(cur_r.get("asset_turnover")))
+
+        # --- Red flags checklist ---
+        st.subheader("Red Flags")
+        st.caption("Rules-based scan over the latest two fiscal years. Not a recommendation — a starting point for investigation.")
+        flags = []
+        if ocf is not None and ni is not None and ni > 0 and ocf < 0.8 * ni:
+            flags.append(f"Operating cash flow ({_fmt_money(ocf)}) is well below net income ({_fmt_money(ni)}) — earnings quality concern.")
+        if fcf is not None and fcf < 0 and ni is not None and ni > 0:
+            flags.append("Free cash flow is negative despite positive net income — capex or working-capital drag.")
+        if cur_r.get("current_ratio") is not None and cur_r["current_ratio"] < 1.0:
+            flags.append(f"Current ratio below 1.0 ({_fmt_x(cur_r['current_ratio'])}) — short-term liquidity under pressure.")
+        if cur_r.get("debt_to_equity") is not None and cur_r["debt_to_equity"] > 2.0:
+            flags.append(f"Debt/equity above 2.0 ({_fmt_x(cur_r['debt_to_equity'])}) — elevated financial leverage.")
+        if prior_r is not None:
+            if dso is not None and prior_r.get("days_sales_outstanding") is not None and dso > prior_r["days_sales_outstanding"] * 1.2:
+                flags.append("DSO jumped >20% YoY — receivables are aging faster than sales are growing.")
+            if dio is not None and prior_r.get("days_inventory_outstanding") is not None and dio > prior_r["days_inventory_outstanding"] * 1.2:
+                flags.append("DIO jumped >20% YoY — inventory is building up relative to COGS.")
+            if prior_r.get("net_profit_margin") is not None and cur_r.get("net_profit_margin") is not None:
+                delta = cur_r["net_profit_margin"] - prior_r["net_profit_margin"]
+                if delta < -0.03:
+                    flags.append(f"Net margin contracted by {abs(delta) * 100:.1f}pp YoY.")
+
+        if flags:
+            for f in flags:
+                st.warning(f)
+        else:
+            st.success("No rule-based red flags triggered for the latest fiscal year.")
+
+    st.divider()
+
+    # --- Revenue & Net Income ---
+
+with tab_perf:
+    st.header("Revenue & Net Income")
+    st.caption(
+        "The top-line (revenue) tells you scale; the bottom-line (net income) tells you "
+        "how much actually makes it through after costs, interest, and taxes. Divergence "
+        "between the two lines usually flags margin pressure or one-time charges."
     )
-    fig.update_layout(yaxis_tickformat=".1%")
-    st.plotly_chart(fig, use_container_width=True)
 
-# --- DuPont ROE Decomposition ---
-st.header("DuPont ROE Decomposition")
-st.caption(
-    "DuPont breaks Return on Equity into three drivers: **Net Margin** (profitability), "
-    "**Asset Turnover** (efficiency), and **Equity Multiplier** (leverage). "
-    "Two companies with the same ROE can get there very differently — this chart shows how."
-)
+    rev_data = query(f"""
+        SELECT ticker, fiscal_year, revenue, net_income
+        FROM analytics.financial_ratios
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+          AND revenue IS NOT NULL AND revenue > 0
+        ORDER BY fiscal_year
+    """)
 
-dupont = query(f"""
-    SELECT ticker, fiscal_year,
-           dupont_net_margin, dupont_asset_turnover,
-           dupont_equity_multiplier, dupont_roe
-    FROM analytics.yoy_trends
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-    ORDER BY fiscal_year
-""")
-
-dupont_ticker = st.selectbox("Company (DuPont)", available)
-dt = dupont[dupont["ticker"] == dupont_ticker].dropna(
-    subset=["dupont_net_margin", "dupont_asset_turnover", "dupont_equity_multiplier"],
-    how="all",
-)
-
-if not dt.empty:
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_net_margin"], name="Net Margin"))
-    fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_asset_turnover"], name="Asset Turnover"))
-    fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_equity_multiplier"], name="Equity Multiplier"))
-    fig.add_trace(go.Scatter(x=dt["fiscal_year"], y=dt["dupont_roe"], name="ROE", mode="lines+markers"))
-    fig.update_layout(title=f"{dupont_ticker} — DuPont Decomposition", barmode="group")
-    st.plotly_chart(fig, use_container_width=True)
-
-# --- Liquidity & Leverage ---
-st.header("Liquidity & Leverage")
-st.caption(
-    "**Current ratio** (current assets ÷ current liabilities) measures short-term solvency — "
-    "can the company pay its bills next year? **Debt-to-equity** measures how much of the capital "
-    "structure is borrowed; higher means more financial risk but also more potential upside."
-)
-
-ratios = query(f"""
-    SELECT ticker, fiscal_year, current_ratio, quick_ratio,
-           debt_to_equity, debt_to_assets
-    FROM analytics.financial_ratios
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-    ORDER BY fiscal_year
-""")
-ratios = clip_outliers(clip_outliers(ratios, "current_ratio"), "debt_to_equity")
-
-col1, col2 = st.columns(2)
-with col1:
-    fig = px.line(
-        ratios.dropna(subset=["current_ratio"]),
-        x="fiscal_year", y="current_ratio", color="ticker",
-        title="Current Ratio", labels={"current_ratio": "Ratio", "fiscal_year": "Year"},
-        markers=True,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    fig = px.line(
-        ratios.dropna(subset=["debt_to_equity"]),
-        x="fiscal_year", y="debt_to_equity", color="ticker",
-        title="Debt-to-Equity", labels={"debt_to_equity": "Ratio", "fiscal_year": "Year"},
-        markers=True,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-# --- Sentiment Analysis ---
-st.header("Filing Sentiment Analysis")
-st.caption(
-    "Loughran-McDonald finance-specific sentiment scoring applied to the **Risk Factors** and **MD&A** "
-    "sections of each 10-K. Management word choice often shifts before the numbers do — a sharp drop in "
-    "net sentiment is worth a second look."
-)
-
-sentiment = query(f"""
-    SELECT ticker, fiscal_year, section_type,
-           net_sentiment, positive_pct, negative_pct,
-           uncertainty_pct, risk_themes, word_count
-    FROM analytics.text_sentiment
-    WHERE ticker IN ({placeholders})
-      AND fiscal_year IS NOT NULL
-    ORDER BY ticker, fiscal_year
-""")
-
-if not sentiment.empty:
     col1, col2 = st.columns(2)
     with col1:
-        rf = sentiment[sentiment["section_type"] == "RISK_FACTORS"].dropna(subset=["net_sentiment"])
-        if not rf.empty:
-            fig = px.line(
-                rf, x="fiscal_year", y="net_sentiment", color="ticker",
-                title="Risk Factors — Net Sentiment",
-                labels={"net_sentiment": "Net Sentiment", "fiscal_year": "Year"},
-                markers=True,
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        fig = px.line(
+            rev_data, x="fiscal_year", y="revenue", color="ticker",
+            title="Revenue Over Time", labels={"revenue": "Revenue ($)", "fiscal_year": "Year"},
+            markers=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        mda = sentiment[sentiment["section_type"] == "MDA"].dropna(subset=["net_sentiment"])
-        if not mda.empty:
-            fig = px.line(
-                mda, x="fiscal_year", y="net_sentiment", color="ticker",
-                title="MD&A — Net Sentiment",
-                labels={"net_sentiment": "Net Sentiment", "fiscal_year": "Year"},
-                markers=True,
+        fig = px.line(
+            rev_data.dropna(subset=["net_income"]),
+            x="fiscal_year", y="net_income", color="ticker",
+            title="Net Income Over Time", labels={"net_income": "Net Income ($)", "fiscal_year": "Year"},
+            markers=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Profitability Margins ---
+    st.header("Profitability Margins")
+    st.caption(
+        "Margins show how much of each revenue dollar survives at each layer of the income statement — "
+        "gross (after COGS), operating (after SG&A/R&D), and net (after everything). "
+        "Rising margins = pricing power or operating leverage; falling margins = cost pressure or mix shift."
+    )
+
+    margins = query(f"""
+        SELECT ticker, fiscal_year, gross_margin, operating_margin, net_profit_margin
+        FROM analytics.financial_ratios
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year
+    """)
+
+    margin_type = st.selectbox("Margin", ["operating_margin", "net_profit_margin", "gross_margin"])
+    margin_plot = clip_outliers(margins.dropna(subset=[margin_type]), margin_type)
+    fig = px.line(
+        margin_plot, x="fiscal_year", y=margin_type, color="ticker",
+        title=f"{margin_type.replace('_', ' ').title()} Over Time",
+        labels={margin_type: "Ratio", "fiscal_year": "Year"},
+        markers=True,
+    )
+    fig.update_layout(yaxis_tickformat=".1%")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- YoY Growth ---
+    st.header("Year-over-Year Growth")
+    st.caption(
+        "Growth rates let you compare companies of very different sizes on the same axis. "
+        "Watch for revenue growth outpacing net-income growth (margin erosion) or the reverse "
+        "(operating leverage kicking in)."
+    )
+
+    yoy = query(f"""
+        SELECT ticker, fiscal_year, revenue_growth, net_income_growth, operating_income_growth
+        FROM analytics.yoy_trends
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year
+    """)
+    yoy = clip_outliers(clip_outliers(yoy, "revenue_growth"), "net_income_growth")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = px.bar(
+            yoy.dropna(subset=["revenue_growth"]),
+            x="fiscal_year", y="revenue_growth", color="ticker",
+            barmode="group", title="Revenue Growth (YoY)",
+            labels={"revenue_growth": "Growth Rate", "fiscal_year": "Year"},
+        )
+        fig.update_layout(yaxis_tickformat=".1%")
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig = px.bar(
+            yoy.dropna(subset=["net_income_growth"]),
+            x="fiscal_year", y="net_income_growth", color="ticker",
+            barmode="group", title="Net Income Growth (YoY)",
+            labels={"net_income_growth": "Growth Rate", "fiscal_year": "Year"},
+        )
+        fig.update_layout(yaxis_tickformat=".1%")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- DuPont ROE Decomposition ---
+    st.header("DuPont ROE Decomposition")
+    st.caption(
+        "DuPont breaks Return on Equity into three drivers: **Net Margin** (profitability), "
+        "**Asset Turnover** (efficiency), and **Equity Multiplier** (leverage). "
+        "Two companies with the same ROE can get there very differently — this chart shows how."
+    )
+
+    dupont = query(f"""
+        SELECT ticker, fiscal_year,
+               dupont_net_margin, dupont_asset_turnover,
+               dupont_equity_multiplier, dupont_roe
+        FROM analytics.yoy_trends
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year
+    """)
+
+    dupont_ticker = st.selectbox("Company (DuPont)", available)
+    dt = dupont[dupont["ticker"] == dupont_ticker].dropna(
+        subset=["dupont_net_margin", "dupont_asset_turnover", "dupont_equity_multiplier"],
+        how="all",
+    )
+
+    if not dt.empty:
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_net_margin"], name="Net Margin"))
+        fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_asset_turnover"], name="Asset Turnover"))
+        fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_equity_multiplier"], name="Equity Multiplier"))
+        fig.add_trace(go.Scatter(x=dt["fiscal_year"], y=dt["dupont_roe"], name="ROE", mode="lines+markers"))
+        fig.update_layout(title=f"{dupont_ticker} — DuPont Decomposition", barmode="group")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Liquidity & Leverage ---
+
+with tab_solv:
+    st.header("Liquidity & Leverage")
+    st.caption(
+        "**Current ratio** (current assets ÷ current liabilities) measures short-term solvency — "
+        "can the company pay its bills next year? **Debt-to-equity** measures how much of the capital "
+        "structure is borrowed; higher means more financial risk but also more potential upside."
+    )
+
+    ratios = query(f"""
+        SELECT ticker, fiscal_year, current_ratio, quick_ratio,
+               debt_to_equity, debt_to_assets
+        FROM analytics.financial_ratios
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+        ORDER BY fiscal_year
+    """)
+    ratios = clip_outliers(clip_outliers(ratios, "current_ratio"), "debt_to_equity")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = px.line(
+            ratios.dropna(subset=["current_ratio"]),
+            x="fiscal_year", y="current_ratio", color="ticker",
+            title="Current Ratio", labels={"current_ratio": "Ratio", "fiscal_year": "Year"},
+            markers=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with col2:
+        fig = px.line(
+            ratios.dropna(subset=["debt_to_equity"]),
+            x="fiscal_year", y="debt_to_equity", color="ticker",
+            title="Debt-to-Equity", labels={"debt_to_equity": "Ratio", "fiscal_year": "Year"},
+            markers=True,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    # --- Sentiment Analysis ---
+
+with tab_sent:
+    st.header("Filing Sentiment Analysis")
+    st.caption(
+        "Loughran-McDonald finance-specific sentiment scoring applied to the **Risk Factors** and **MD&A** "
+        "sections of each 10-K. Management word choice often shifts before the numbers do — a sharp drop in "
+        "net sentiment is worth a second look."
+    )
+
+    sentiment = query(f"""
+        SELECT ticker, fiscal_year, section_type,
+               net_sentiment, positive_pct, negative_pct,
+               uncertainty_pct, risk_themes, word_count
+        FROM analytics.text_sentiment
+        WHERE ticker IN ({placeholders})
+          AND fiscal_year IS NOT NULL
+        ORDER BY ticker, fiscal_year
+    """)
+
+    if not sentiment.empty:
+        col1, col2 = st.columns(2)
+        with col1:
+            rf = sentiment[sentiment["section_type"] == "RISK_FACTORS"].dropna(subset=["net_sentiment"])
+            if not rf.empty:
+                fig = px.line(
+                    rf, x="fiscal_year", y="net_sentiment", color="ticker",
+                    title="Risk Factors — Net Sentiment",
+                    labels={"net_sentiment": "Net Sentiment", "fiscal_year": "Year"},
+                    markers=True,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            mda = sentiment[sentiment["section_type"] == "MDA"].dropna(subset=["net_sentiment"])
+            if not mda.empty:
+                fig = px.line(
+                    mda, x="fiscal_year", y="net_sentiment", color="ticker",
+                    title="MD&A — Net Sentiment",
+                    labels={"net_sentiment": "Net Sentiment", "fiscal_year": "Year"},
+                    markers=True,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Risk Themes Detected")
+        st.caption("Keyword-tagged risk categories surfaced from each filing's Risk Factors section.")
+        with st.expander("What each theme means", expanded=False):
+            st.markdown(
+                "- **cyber** — data breach, ransomware, phishing, information-security failures, "
+                "hacking incidents. *e.g. \"a successful cyberattack could compromise customer data.\"*\n"
+                "- **climate** — greenhouse-gas emissions, carbon regulation, sustainability mandates, "
+                "extreme-weather disruption, transition to renewables. *e.g. \"evolving climate regulations "
+                "may increase our compliance costs.\"*\n"
+                "- **regulatory** — new legislation, antitrust scrutiny, SEC/FTC actions, licensing and "
+                "compliance burdens. *e.g. \"pending antitrust investigations could limit acquisitions.\"*\n"
+                "- **supply_chain** — supplier concentration, component shortages, logistics disruptions, "
+                "inventory-risk events. *e.g. \"a single-source supplier failure could halt production.\"*\n"
+                "- **macro** — inflation, recession, interest-rate moves, geopolitical conflict, tariffs, "
+                "trade wars, pandemics. *e.g. \"persistent inflation may pressure consumer demand.\"*"
             )
-            st.plotly_chart(fig, use_container_width=True)
+        themes = sentiment[sentiment["risk_themes"].notna()][
+            ["ticker", "fiscal_year", "section_type", "risk_themes"]
+        ]
+        if not themes.empty:
+            st.dataframe(themes, use_container_width=True, hide_index=True)
+    else:
+        st.info("No sentiment data available for selected companies.")
 
-    st.subheader("Risk Themes Detected")
-    st.caption("Keyword-tagged risk categories surfaced from each filing's Risk Factors section.")
-    themes = sentiment[sentiment["risk_themes"].notna()][
-        ["ticker", "fiscal_year", "section_type", "risk_themes"]
-    ]
-    if not themes.empty:
-        st.dataframe(themes, use_container_width=True, hide_index=True)
-else:
-    st.info("No sentiment data available for selected companies.")
+    # --- Raw Data Explorer ---
 
-# --- Raw Data Explorer ---
-st.header("Data Explorer")
-st.caption("Browse the underlying tables. Useful for sanity-checking anything above.")
+with tab_data:
+    st.header("Data Explorer")
+    st.caption("Browse the underlying tables. Useful for sanity-checking anything above.")
 
-table = st.selectbox("Table", [
-    "analytics.financial_ratios",
-    "analytics.yoy_trends",
-    "analytics.text_sentiment",
-    "staging.financial_metrics",
-    "raw.sec_filings",
-])
+    table = st.selectbox("Table", [
+        "analytics.financial_ratios",
+        "analytics.yoy_trends",
+        "analytics.text_sentiment",
+        "staging.financial_metrics",
+        "raw.sec_filings",
+    ])
 
-explorer_df = query(f"""
-    SELECT * FROM {table}
-    WHERE ticker IN ({placeholders})
-    ORDER BY ticker, fiscal_year
-""")
-st.dataframe(explorer_df, use_container_width=True, hide_index=True)
+    order_col = "filing_date DESC" if table == "raw.sec_filings" else "fiscal_year"
+    explorer_df = query(f"""
+        SELECT * FROM {table}
+        WHERE ticker IN ({placeholders})
+        ORDER BY ticker, {order_col}
+    """)
+    st.dataframe(explorer_df, use_container_width=True, hide_index=True)
+
