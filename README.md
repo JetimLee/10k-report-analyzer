@@ -77,6 +77,32 @@ Financial analysts, investors, and equity researchers spend enormous amounts of 
 - **MiniLM for peer discovery** — 90MB, CPU-friendly, sufficient for short business-description similarity. No GPU, no external API.
 - **Sentence embeddings, not just SIC** — industry codes fail for modern, multi-segment businesses. Embedding the actual prose of Item 1 captures business-model similarity the way a human analyst would.
 
+### Why Item 1 embeddings — and why they're efficient
+
+**What we embed:** every 10-K begins with **Item 1 ("Business")** — 5k–50k words in which management, under legal obligation to be accurate, describes *exactly* what the company does: products, segments, customers, markets, distribution, competition, and strategy. It is the single highest-signal, lowest-noise text in the corpus for modeling business-model similarity.
+
+**What we explicitly *don't* embed:**
+- MD&A — too anchored to the current fiscal year's financial performance.
+- Risk Factors — legally defensive and highly correlated across all public companies ("cybersecurity", "macroeconomic conditions", etc.).
+- Financial statements — captured separately as structured XBRL facts.
+- Full 10-K — dilutes the signal; Item 1 is where business-model vocabulary actually lives.
+
+**Extraction pipeline.** HTML is stripped → Item 1 header located → section body captured up to the next *real* section boundary. A cross-reference filter (added to handle Amazon-style filings where management writes "*See Item 1A of Part I Risk Factors*" inside the Business section) prevents in-text citations from truncating the body. The extracted text is clipped to 20,000 characters — MiniLM truncates at 512 tokens (~2k characters) anyway, so most of the 20k acts as a safe margin for where the salient vocabulary sits.
+
+**Why MiniLM (all-MiniLM-L6-v2) is the right tool:**
+
+| Property | Value | Why it matters |
+|---|---|---|
+| Model size | 22M params, ~90MB on disk | Baked into the Docker image at build time — no runtime download, no HuggingFace dependency at query time. |
+| Embedding dim | 384 | 384 × 4 bytes = **1.5KB per company**. 500 companies = 750KB. Fits in DuckDB as a `FLOAT[]` column with no vector-DB overhead. |
+| Runtime | ~30ms/doc on CPU | Embedding the full S&P 500 takes ~30 seconds of model time (hours of wall time go to SEC fetches, not compute). |
+| Normalization | L2-normalized at ingest | Cosine similarity collapses to a single dot product — rank 500 peers in **~1ms** via one `numpy` matmul. No ANN index, no Qdrant, no FAISS. |
+| License + cost | Apache 2.0, local | Zero per-query cost, no API key, works offline. |
+
+**Why this scales.** DuckDB holds all 500 vectors in memory as a dense `(500, 384)` float32 matrix (~750KB). Computing every pairwise similarity for ranking is a single `mat @ anchor` matmul — exact, not approximate, and faster than a round-trip to a vector DB. Scaling to 10k companies would still be a 15MB matrix and a ~5ms matmul — we simply don't need approximate-nearest-neighbor infrastructure at this size.
+
+**Why the one-time seed is actually one-time.** Companies file 10-Ks once per fiscal year. The seed script is idempotent — it skips tickers whose stored `fiscal_year` already matches the latest filing — so re-running it after a company's annual filing becomes a small delta job, not a full re-seed.
+
 ## Key Metrics Computed
 
 | Category | Metrics |
