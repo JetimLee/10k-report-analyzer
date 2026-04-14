@@ -1,4 +1,4 @@
-""" @bruin
+"""@bruin
 name: analytics.business_embeddings
 type: python
 depends:
@@ -13,14 +13,16 @@ columns:
     type: integer
     checks:
       - name: not_null
-@bruin """
+@bruin"""
 
 import os
 import time
 
 import duckdb
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db"))
+DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db")
+)
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"  # 384-dim, ~90MB
 MAX_CHARS = 20000  # Clip Item 1 to first ~20k chars; MiniLM truncates anyway
 
@@ -95,7 +97,9 @@ def materialize(context):
         out,
     )
 
-    count = con.execute("SELECT count(*) FROM analytics.business_embeddings").fetchone()[0]
+    count = con.execute(
+        "SELECT count(*) FROM analytics.business_embeddings"
+    ).fetchone()[0]
     print(f"Wrote {count} embedding rows")
     con.close()
 

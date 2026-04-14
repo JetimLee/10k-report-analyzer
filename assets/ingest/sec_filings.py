@@ -1,4 +1,4 @@
-""" @bruin
+"""@bruin
 name: raw.sec_filings
 type: python
 columns:
@@ -25,14 +25,16 @@ custom_checks:
         HAVING c > 1
       )
     value: 0
-@bruin """
+@bruin"""
 
 import os
 import duckdb
 import requests
 import time
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db"))
+DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db")
+)
 
 
 def connect_db(retries=15, delay=2):
@@ -46,6 +48,7 @@ def connect_db(retries=15, delay=2):
             else:
                 raise
 
+
 def load_tickers(con):
     """Load ticker symbols from config.selected_tickers (source of truth)."""
     con.execute("CREATE SCHEMA IF NOT EXISTS config")
@@ -56,15 +59,19 @@ def load_tickers(con):
         )
     """)
     tickers = [
-        r[0] for r in con.execute(
+        r[0]
+        for r in con.execute(
             "SELECT ticker FROM config.selected_tickers ORDER BY ticker"
         ).fetchall()
     ]
     if tickers:
-        print(f"Loaded {len(tickers)} tickers from config.selected_tickers: {', '.join(tickers)}")
+        print(
+            f"Loaded {len(tickers)} tickers from config.selected_tickers: {', '.join(tickers)}"
+        )
     else:
         print("config.selected_tickers is empty — no tickers to process")
     return tickers
+
 
 HEADERS = {
     "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
@@ -107,20 +114,22 @@ def get_10k_filings(cik):
         if form == "10-K":
             accession_no = accessions[i]
             accession_dashed = accession_no.replace("-", "")
-            filings.append({
-                "accession_number": accession_no,
-                "filing_date": filing_dates[i],
-                "report_date": report_dates[i],
-                "primary_doc": primary_docs[i],
-                "filing_url": (
-                    f"https://www.sec.gov/Archives/edgar/data/"
-                    f"{cik.lstrip('0')}/{accession_dashed}/{primary_docs[i]}"
-                ),
-                "index_url": (
-                    f"https://www.sec.gov/Archives/edgar/data/"
-                    f"{cik.lstrip('0')}/{accession_dashed}/"
-                ),
-            })
+            filings.append(
+                {
+                    "accession_number": accession_no,
+                    "filing_date": filing_dates[i],
+                    "report_date": report_dates[i],
+                    "primary_doc": primary_docs[i],
+                    "filing_url": (
+                        f"https://www.sec.gov/Archives/edgar/data/"
+                        f"{cik.lstrip('0')}/{accession_dashed}/{primary_docs[i]}"
+                    ),
+                    "index_url": (
+                        f"https://www.sec.gov/Archives/edgar/data/"
+                        f"{cik.lstrip('0')}/{accession_dashed}/"
+                    ),
+                }
+            )
     form_counts = {}
     for f in forms:
         form_counts[f] = form_counts.get(f, 0) + 1
@@ -181,7 +190,9 @@ def materialize(context):
             updated_at TIMESTAMP DEFAULT now()
         )
     """)
-    con.execute("DELETE FROM config.ingest_status WHERE ticker IN (SELECT ticker FROM config.selected_tickers)")
+    con.execute(
+        "DELETE FROM config.ingest_status WHERE ticker IN (SELECT ticker FROM config.selected_tickers)"
+    )
 
     rows = []
     for ticker in tickers:
@@ -216,14 +227,17 @@ def materialize(context):
                 msg = "Canadian filer — files 40-F, not 10-K. Not supported by this pipeline."
                 status = "not_10k_filer"
             elif form_counts.get("10-K/A", 0) > 0 and not form_counts.get("10-K"):
-                msg = "Only 10-K/A amendments found; no original 10-K in recent history."
+                msg = (
+                    "Only 10-K/A amendments found; no original 10-K in recent history."
+                )
                 status = "no_10k"
             elif not form_counts:
                 msg = "No filings returned by SEC submissions API."
                 status = "no_filings"
             else:
                 top_forms = ", ".join(
-                    f"{k} ({v})" for k, v in sorted(form_counts.items(), key=lambda kv: -kv[1])[:4]
+                    f"{k} ({v})"
+                    for k, v in sorted(form_counts.items(), key=lambda kv: -kv[1])[:4]
                 )
                 msg = f"No 10-K in recent filings. Found: {top_forms}."
                 status = "no_10k"
@@ -233,18 +247,22 @@ def materialize(context):
             continue
 
         for f in filings:
-            rows.append((
-                ticker,
-                company_name,
-                cik,
-                f["accession_number"],
-                f["filing_date"],
-                f["report_date"],
-                f["primary_doc"],
-                f["filing_url"],
-                f["index_url"],
-            ))
-        record_status(con, ticker, "ingested", f"{len(filings)} 10-K filing(s) ingested.")
+            rows.append(
+                (
+                    ticker,
+                    company_name,
+                    cik,
+                    f["accession_number"],
+                    f["filing_date"],
+                    f["report_date"],
+                    f["primary_doc"],
+                    f["filing_url"],
+                    f["index_url"],
+                )
+            )
+        record_status(
+            con, ticker, "ingested", f"{len(filings)} 10-K filing(s) ingested."
+        )
 
         # SEC rate limit: 10 req/sec
         time.sleep(0.15)

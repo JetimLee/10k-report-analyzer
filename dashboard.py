@@ -21,14 +21,40 @@ SEC_HEADERS = {
 }
 CATEGORIES = {
     "Big Tech": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "ORCL"],
-    "AI Leaders": ["NVDA", "MSFT", "GOOGL", "META", "AMZN", "AAPL", "PLTR", "AMD", "AVGO", "ORCL", "CRM", "SNOW", "IBM", "ARM", "TSM"],
+    "AI Leaders": [
+        "NVDA",
+        "MSFT",
+        "GOOGL",
+        "META",
+        "AMZN",
+        "AAPL",
+        "PLTR",
+        "AMD",
+        "AVGO",
+        "ORCL",
+        "CRM",
+        "SNOW",
+        "IBM",
+        "ARM",
+        "TSM",
+    ],
     "Banking": ["JPM", "BAC", "WFC", "C", "GS", "MS", "USB", "PNC"],
     "Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII"],
     "Pharma & Biotech": ["JNJ", "PFE", "MRK", "LLY", "ABBV", "BMY", "AMGN", "GILD"],
     "Energy (Oil & Gas)": ["XOM", "CVX", "COP", "SLB", "EOG", "PSX", "MPC", "OXY"],
     "Retail": ["WMT", "COST", "TGT", "HD", "LOW", "KR", "DG"],
     "Automotive": ["TSLA", "GM", "F", "STLA", "RIVN", "LCID"],
-    "Semiconductors": ["NVDA", "AMD", "INTC", "AVGO", "QCOM", "TXN", "MU", "AMAT", "LRCX"],
+    "Semiconductors": [
+        "NVDA",
+        "AMD",
+        "INTC",
+        "AVGO",
+        "QCOM",
+        "TXN",
+        "MU",
+        "AMAT",
+        "LRCX",
+    ],
     "Cloud & SaaS": ["CRM", "NOW", "SNOW", "MDB", "DDOG", "NET", "PLTR", "WDAY"],
     "Streaming & Media": ["NFLX", "DIS", "CMCSA", "WBD", "PARA", "SPOT"],
     "Airlines": ["DAL", "UAL", "AAL", "LUV", "ALK"],
@@ -39,10 +65,34 @@ CATEGORIES = {
 }
 
 STOPWORDS = {
-    "inc", "corp", "corporation", "company", "co", "ltd", "llc", "holdings",
-    "group", "plc", "the", "and", "of", "international", "industries", "systems",
-    "technologies", "technology", "services", "solutions", "global", "new",
-    "class", "common", "stock", "a", "b", "c",
+    "inc",
+    "corp",
+    "corporation",
+    "company",
+    "co",
+    "ltd",
+    "llc",
+    "holdings",
+    "group",
+    "plc",
+    "the",
+    "and",
+    "of",
+    "international",
+    "industries",
+    "systems",
+    "technologies",
+    "technology",
+    "services",
+    "solutions",
+    "global",
+    "new",
+    "class",
+    "common",
+    "stock",
+    "a",
+    "b",
+    "c",
 }
 
 st.set_page_config(page_title="10-K Analyzer", layout="wide")
@@ -215,7 +265,8 @@ def read_selected_tickers():
         return []
     try:
         return [
-            r[0] for r in con.execute(
+            r[0]
+            for r in con.execute(
                 "SELECT ticker FROM config.selected_tickers ORDER BY ticker"
             ).fetchall()
         ]
@@ -269,7 +320,9 @@ def parse_asset_event(line):
             lower = clean.lower()
             if any(k in lower for k in ("failed", "error")):
                 return asset, "fail"
-            if any(k in lower for k in ("completed", "finished", "success", "✓", "done")):
+            if any(
+                k in lower for k in ("completed", "finished", "success", "✓", "done")
+            ):
                 return asset, "done"
             if any(k in lower for k in ("running", "starting", "executing", "▶")):
                 return asset, "start"
@@ -325,6 +378,7 @@ def run_bruin_pipeline(progress_bar, status_text, log_container):
     """Stream `bruin run` output, updating progress UI and (optionally) a log.
     Returns (returncode, full_output, completed_assets, failed_assets)."""
     import shutil
+
     cmd = (
         ["poetry", "run", "bruin", "run", "."]
         if shutil.which("poetry")
@@ -357,7 +411,11 @@ def run_bruin_pipeline(progress_bar, status_text, log_container):
 
         done_count = len(completed)
         progress_bar.progress(min(done_count / total, 1.0))
-        label = f"Running: **{current}**" if current else f"{done_count} of {total} assets complete"
+        label = (
+            f"Running: **{current}**"
+            if current
+            else f"{done_count} of {total} assets complete"
+        )
         status_text.markdown(f"{label}")
 
     proc.wait()
@@ -418,7 +476,9 @@ with st.sidebar.expander("Pick by category", expanded=False):
             )
             st.rerun()
 
-if st.sidebar.button("Clear all tickers", disabled=not st.session_state.get("selection")):
+if st.sidebar.button(
+    "Clear all tickers", disabled=not st.session_state.get("selection")
+):
     st.session_state["selection"] = []
     write_selected_tickers([])
     st.rerun()
@@ -440,6 +500,7 @@ generate_clicked = st.sidebar.button(
     "Generate Report", type="primary", disabled=not selected, key="gen_report_btn"
 )
 
+
 # --- Similar-company suggestions ---
 @st.cache_data(ttl=300)
 def load_embeddings():
@@ -447,12 +508,16 @@ def load_embeddings():
     When a ticker is in both, prefer the ingested row (has more 10-K data)."""
     frames = []
     try:
-        a = query("SELECT ticker, embedding, 'ingested' AS source FROM analytics.business_embeddings")
+        a = query(
+            "SELECT ticker, embedding, 'ingested' AS source FROM analytics.business_embeddings"
+        )
         frames.append(a)
     except Exception:
         pass
     try:
-        b = query("SELECT ticker, embedding, 'universe' AS source FROM analytics.sec_universe_embeddings")
+        b = query(
+            "SELECT ticker, embedding, 'universe' AS source FROM analytics.sec_universe_embeddings"
+        )
         frames.append(b)
     except Exception:
         pass
@@ -505,11 +570,14 @@ if selected and not sec_df.empty:
         else:
             top_k = st.slider(
                 "How many peers to show",
-                min_value=10, max_value=100, value=25, step=5,
+                min_value=10,
+                max_value=100,
+                value=25,
+                step=5,
                 key="peer_top_k",
                 help="Cosine similarity is symmetric, but a fixed cutoff isn't — "
-                     "if A has many close neighbors, B may sit just outside A's top-N "
-                     "even when A is in B's top-N. Widen the list to see more.",
+                "if A has many close neighbors, B may sit just outside A's top-N "
+                "even when A is in B's top-N. Widen the list to see more.",
             )
             ranked = embedding_peers(anchor, emb_df, top_k=top_k)
             if ranked.empty:
@@ -522,19 +590,31 @@ if selected and not sec_df.empty:
                 to_add_emb = st.multiselect(
                     "Ranked peers (higher score = more similar)",
                     options=options,
-                    format_func=lambda t: ranked.loc[ranked["ticker"] == t, "label"].iloc[0],
+                    format_func=lambda t: ranked.loc[
+                        ranked["ticker"] == t, "label"
+                    ].iloc[0],
                     key="peer_add_emb",
                 )
-                if st.button("Add to selection", disabled=not to_add_emb, key="add_emb"):
+                if st.button(
+                    "Add to selection", disabled=not to_add_emb, key="add_emb"
+                ):
                     st.session_state["_add_to_selection"] = to_add_emb
                     st.rerun()
 
     # --- SIC-based peer discovery (for finding brand-new tickers outside the ingested set) ---
     with tab_sic:
-        st.caption("Coarse industry filter. Use this to surface candidates you haven't ingested yet.")
-        need_lookup = [t for t in list(dict.fromkeys([anchor, *already_ingested])) if t not in sic_cache]
+        st.caption(
+            "Coarse industry filter. Use this to surface candidates you haven't ingested yet."
+        )
+        need_lookup = [
+            t
+            for t in list(dict.fromkeys([anchor, *already_ingested]))
+            if t not in sic_cache
+        ]
         if need_lookup:
-            with st.status(f"Fetching SIC for {len(need_lookup)} tickers…", expanded=False):
+            with st.status(
+                f"Fetching SIC for {len(need_lookup)} tickers…", expanded=False
+            ):
                 get_sic_bulk(need_lookup, cik_lookup, sic_cache)
 
         anchor_sic = sic_cache.get(anchor, {}).get("sic", "")
@@ -543,7 +623,8 @@ if selected and not sec_df.empty:
         if anchor_sic:
             st.caption(f"SIC **{anchor_sic}** — {anchor_desc}")
             peers = sorted(
-                t for t, v in sic_cache.items()
+                t
+                for t, v in sic_cache.items()
                 if v.get("sic") == anchor_sic and t != anchor and t in label_map
             )
             not_yet = [t for t in peers if t not in selected]
@@ -554,22 +635,33 @@ if selected and not sec_df.empty:
                     format_func=lambda t: f"{t} — {label_map.get(t, t)}",
                     key="peer_add_sic",
                 )
-                if st.button("Add to selection", disabled=not to_add_sic, key="add_sic"):
+                if st.button(
+                    "Add to selection", disabled=not to_add_sic, key="add_sic"
+                ):
                     st.session_state["_add_to_selection"] = to_add_sic
                     st.rerun()
             else:
                 st.caption("No new SIC peers cached — run Discover below.")
 
-            scan_size = st.slider("Scan batch size", 10, 100, 40, step=10, key="scan_size")
+            scan_size = st.slider(
+                "Scan batch size", 10, 100, 40, step=10, key="scan_size"
+            )
             if st.button("Discover more peers", key="discover_sic"):
-                ranked_c = rank_name_similar(anchor, label_map.get(anchor, ""), sec_df, limit=scan_size)
+                ranked_c = rank_name_similar(
+                    anchor, label_map.get(anchor, ""), sec_df, limit=scan_size
+                )
                 uncached = [t for t in ranked_c if t not in sic_cache]
                 if len(uncached) < scan_size:
-                    extras = [t for t in sec_df["ticker"] if t not in sic_cache and t not in uncached]
+                    extras = [
+                        t
+                        for t in sec_df["ticker"]
+                        if t not in sic_cache and t not in uncached
+                    ]
                     uncached.extend(extras[: scan_size - len(uncached)])
                 if uncached:
                     with st.status(
-                        f"Scanning {len(uncached)} candidates for SIC {anchor_sic}…", expanded=True
+                        f"Scanning {len(uncached)} candidates for SIC {anchor_sic}…",
+                        expanded=True,
                     ) as s:
                         hits = []
 
@@ -579,7 +671,10 @@ if selected and not sec_df.empty:
                                 s.update(label=f"Found {len(hits)} peer(s), scanning…")
 
                         get_sic_bulk(uncached, cik_lookup, sic_cache, status_cb=_cb)
-                        s.update(label=f"Done — {len(hits)} new peer(s) found", state="complete")
+                        s.update(
+                            label=f"Done — {len(hits)} new peer(s) found",
+                            state="complete",
+                        )
                     st.rerun()
                 else:
                     st.info("Entire SEC universe already cached — no candidates left.")
@@ -588,7 +683,9 @@ if selected and not sec_df.empty:
 
 st.sidebar.divider()
 
-dev_mode = st.sidebar.toggle("Developer mode", value=False, help="Show the full pipeline log")
+dev_mode = st.sidebar.toggle(
+    "Developer mode", value=False, help="Show the full pipeline log"
+)
 
 # --- Seed peer-suggestion universe ---
 st.sidebar.divider()
@@ -615,10 +712,14 @@ with st.sidebar.expander("Peer universe", expanded=False):
         index=0,
         help="Each ticker takes ~5–10s due to SEC rate limits. Start small to verify.",
     )
-    scope_limit = {"Quick smoke test (20)": 20, "Broad (100)": 100, "Full index": None}[seed_scope]
+    scope_limit = {"Quick smoke test (20)": 20, "Broad (100)": 100, "Full index": None}[
+        seed_scope
+    ]
 
     if st.button("Start seeding", key="seed_btn"):
-        with st.status(f"Seeding {index_label} ({seed_scope})…", expanded=True) as seed_status:
+        with st.status(
+            f"Seeding {index_label} ({seed_scope})…", expanded=True
+        ) as seed_status:
             seed_progress = st.progress(0.0)
             seed_text = st.empty()
             seed_log = None
@@ -630,7 +731,11 @@ with st.sidebar.expander("Peer universe", expanded=False):
             )
             if rc == 0:
                 summary_line = next(
-                    (line for line in output.splitlines() if line.strip().startswith("embedded:")),
+                    (
+                        line
+                        for line in output.splitlines()
+                        if line.strip().startswith("embedded:")
+                    ),
                     f"{done}/{total} processed",
                 )
                 seed_text.success(f"✓ Seed complete — {summary_line}")
@@ -640,7 +745,9 @@ with st.sidebar.expander("Peer universe", expanded=False):
                 st.rerun()
             else:
                 seed_status.update(label="Seed failed", state="error")
-                seed_text.error(f"✗ Seed failed (exit {rc}). Turn on Developer mode for the full log.")
+                seed_text.error(
+                    f"✗ Seed failed (exit {rc}). Turn on Developer mode for the full log."
+                )
 
 if generate_clicked:
     write_selected_tickers(selected)
@@ -651,11 +758,15 @@ if generate_clicked:
         if dev_mode:
             with st.expander("Pipeline log", expanded=False):
                 log_box = st.empty()
-        rc, output, completed, failed = run_bruin_pipeline(progress_bar, status_text, log_box)
+        rc, output, completed, failed = run_bruin_pipeline(
+            progress_bar, status_text, log_box
+        )
 
         if rc == 0:
             progress_bar.progress(1.0)
-            status_text.success(f"✓ Pipeline complete — {len(completed)} of {len(PIPELINE_ASSETS)} assets built")
+            status_text.success(
+                f"✓ Pipeline complete — {len(completed)} of {len(PIPELINE_ASSETS)} assets built"
+            )
             status.update(label="Pipeline complete", state="complete")
             st.cache_data.clear()
             time.sleep(1)
@@ -664,13 +775,18 @@ if generate_clicked:
             status.update(label="Pipeline failed", state="error")
             if failed:
                 status_text.error(
-                    "✗ Pipeline failed. Failed assets:\n" + "\n".join(f"- `{a}`" for a in sorted(failed))
+                    "✗ Pipeline failed. Failed assets:\n"
+                    + "\n".join(f"- `{a}`" for a in sorted(failed))
                 )
             else:
-                status_text.error(f"✗ Pipeline failed (exit {rc}). Turn on Developer mode to see the log.")
+                status_text.error(
+                    f"✗ Pipeline failed (exit {rc}). Turn on Developer mode to see the log."
+                )
 
 if not selected:
-    st.info("Select at least one ticker in the sidebar, then click **Generate Report**.")
+    st.info(
+        "Select at least one ticker in the sidebar, then click **Generate Report**."
+    )
     st.stop()
 
 # Only chart tickers that actually have data
@@ -710,7 +826,8 @@ with tab_overview:
         "the most recent fiscal year on file, and combined revenue for that year."
     )
 
-    latest = query(f"""
+    latest = query(
+        f"""
         SELECT ticker, fiscal_year, revenue, net_income,
                gross_margin, operating_margin, net_profit_margin,
                return_on_equity, return_on_assets,
@@ -719,7 +836,9 @@ with tab_overview:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year DESC
-    """, available)
+    """,
+        available,
+    )
 
     latest_year = latest.groupby("ticker").first().reset_index()
 
@@ -744,20 +863,28 @@ with tab_deep:
     )
 
     deep_ticker = st.selectbox(
-        "Company to analyze", available, key="deep_dive_ticker",
+        "Company to analyze",
+        available,
+        key="deep_dive_ticker",
         format_func=lambda t: f"{t} — {label_map.get(t, t)}",
     )
 
-    stmt = query("""
+    stmt = query(
+        """
         SELECT * FROM staging.financial_metrics
         WHERE ticker = ? AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year DESC
-    """, [deep_ticker])
-    rat = query("""
+    """,
+        [deep_ticker],
+    )
+    rat = query(
+        """
         SELECT * FROM analytics.financial_ratios
         WHERE ticker = ? AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year DESC
-    """, [deep_ticker])
+    """,
+        [deep_ticker],
+    )
 
     if stmt.empty or rat.empty:
         st.info(f"No financial-statement data for {deep_ticker} yet.")
@@ -813,7 +940,9 @@ with tab_deep:
         ni = _safe(cur["net_income"])
         ocf = _safe(cur["operating_cash_flow"])
         roa_now = _safe(cur_r.get("return_on_assets"))
-        roa_prev = _safe(prior_r.get("return_on_assets")) if prior_r is not None else None
+        roa_prev = (
+            _safe(prior_r.get("return_on_assets")) if prior_r is not None else None
+        )
         da_now = _safe(cur_r.get("debt_to_assets"))
         da_prev = _safe(prior_r.get("debt_to_assets")) if prior_r is not None else None
         cr_now = _safe(cur_r.get("current_ratio"))
@@ -830,14 +959,41 @@ with tab_deep:
 
         checks = [
             ("Profitable", "Net income > 0", (ni > 0) if ni is not None else None),
-            ("Cash-generative", "Operating cash flow > 0", (ocf > 0) if ocf is not None else None),
-            ("Quality of earnings", "Operating CF ≥ Net Income",
-             (ocf >= ni) if (ocf is not None and ni is not None) else None),
-            ("Improving ROA", "ROA higher than prior year", _cmp(roa_now, roa_prev, lambda a, b: a > b)),
-            ("Deleveraging", "Debt/assets lower than prior year", _cmp(da_now, da_prev, lambda a, b: a < b)),
-            ("Liquidity trending up", "Current ratio higher than prior year", _cmp(cr_now, cr_prev, lambda a, b: a > b)),
-            ("Margin expansion", "Gross margin higher than prior year", _cmp(gm_now, gm_prev, lambda a, b: a > b)),
-            ("Asset efficiency up", "Asset turnover higher than prior year", _cmp(at_now, at_prev, lambda a, b: a > b)),
+            (
+                "Cash-generative",
+                "Operating cash flow > 0",
+                (ocf > 0) if ocf is not None else None,
+            ),
+            (
+                "Quality of earnings",
+                "Operating CF ≥ Net Income",
+                (ocf >= ni) if (ocf is not None and ni is not None) else None,
+            ),
+            (
+                "Improving ROA",
+                "ROA higher than prior year",
+                _cmp(roa_now, roa_prev, lambda a, b: a > b),
+            ),
+            (
+                "Deleveraging",
+                "Debt/assets lower than prior year",
+                _cmp(da_now, da_prev, lambda a, b: a < b),
+            ),
+            (
+                "Liquidity trending up",
+                "Current ratio higher than prior year",
+                _cmp(cr_now, cr_prev, lambda a, b: a > b),
+            ),
+            (
+                "Margin expansion",
+                "Gross margin higher than prior year",
+                _cmp(gm_now, gm_prev, lambda a, b: a > b),
+            ),
+            (
+                "Asset efficiency up",
+                "Asset turnover higher than prior year",
+                _cmp(at_now, at_prev, lambda a, b: a > b),
+            ),
         ]
         score = sum(1 for _, _, ok in checks if ok is True)
         n_a = sum(1 for _, _, ok in checks if ok is None)
@@ -845,13 +1001,18 @@ with tab_deep:
         grade = "Strong" if score >= 6 else ("Mixed" if score >= 3 else "Weak")
         st.metric("Score", f"{score} / 8", delta=grade)
         if n_a:
-            st.caption(f"{n_a} check(s) N/A — prior-year data missing. Score reflects {evaluated} evaluated checks.")
+            st.caption(
+                f"{n_a} check(s) N/A — prior-year data missing. Score reflects {evaluated} evaluated checks."
+            )
 
         def _mark(ok):
             return "✓" if ok is True else ("N/A" if ok is None else "✗")
 
         check_df = pd.DataFrame(
-            [{"Check": name, "Criterion": desc, "Pass": _mark(ok)} for name, desc, ok in checks]
+            [
+                {"Check": name, "Criterion": desc, "Pass": _mark(ok)}
+                for name, desc, ok in checks
+            ]
         )
         st.dataframe(check_df, use_container_width=True, hide_index=True)
 
@@ -869,29 +1030,67 @@ with tab_deep:
         if revenue and gross is not None and op is not None and ni is not None:
             opex = gross - op  # SG&A + R&D + D&A ≈ gross_profit - operating_income
             below_line = op - ni  # interest + tax + other
-            fig = go.Figure(go.Waterfall(
-                measure=["absolute", "relative", "total", "relative", "total", "relative", "total"],
-                x=["Revenue", "COGS", "Gross Profit", "Operating Exp.", "Operating Income", "Int/Tax/Other", "Net Income"],
-                y=[revenue, -(cogs or 0), gross, -opex, op, -below_line, ni],
-                connector={"line": {"color": "rgb(150,150,150)"}},
-            ))
-            fig.update_layout(title=f"{deep_ticker} FY{fy} — Revenue → Net Income", showlegend=False)
+            fig = go.Figure(
+                go.Waterfall(
+                    measure=[
+                        "absolute",
+                        "relative",
+                        "total",
+                        "relative",
+                        "total",
+                        "relative",
+                        "total",
+                    ],
+                    x=[
+                        "Revenue",
+                        "COGS",
+                        "Gross Profit",
+                        "Operating Exp.",
+                        "Operating Income",
+                        "Int/Tax/Other",
+                        "Net Income",
+                    ],
+                    y=[revenue, -(cogs or 0), gross, -opex, op, -below_line, ni],
+                    connector={"line": {"color": "rgb(150,150,150)"}},
+                )
+            )
+            fig.update_layout(
+                title=f"{deep_ticker} FY{fy} — Revenue → Net Income", showlegend=False
+            )
             st.plotly_chart(fig, use_container_width=True)
 
             # Common-size income statement
-            st.caption("**Common-size** (every line as a % of revenue) makes cost structure comparable across years and peers.")
-            cs = pd.DataFrame({
-                "Line item": ["Revenue", "COGS", "Gross Profit", "Operating Expenses", "Operating Income", "Net Income"],
-                "$ (current)": [_fmt_money(revenue), _fmt_money(cogs), _fmt_money(gross), _fmt_money(opex), _fmt_money(op), _fmt_money(ni)],
-                "% of revenue": [
-                    "100.0%",
-                    _fmt_pct((cogs or 0) / revenue) if revenue else "—",
-                    _fmt_pct(gross / revenue) if revenue else "—",
-                    _fmt_pct(opex / revenue) if revenue else "—",
-                    _fmt_pct(op / revenue) if revenue else "—",
-                    _fmt_pct(ni / revenue) if revenue else "—",
-                ],
-            })
+            st.caption(
+                "**Common-size** (every line as a % of revenue) makes cost structure comparable across years and peers."
+            )
+            cs = pd.DataFrame(
+                {
+                    "Line item": [
+                        "Revenue",
+                        "COGS",
+                        "Gross Profit",
+                        "Operating Expenses",
+                        "Operating Income",
+                        "Net Income",
+                    ],
+                    "$ (current)": [
+                        _fmt_money(revenue),
+                        _fmt_money(cogs),
+                        _fmt_money(gross),
+                        _fmt_money(opex),
+                        _fmt_money(op),
+                        _fmt_money(ni),
+                    ],
+                    "% of revenue": [
+                        "100.0%",
+                        _fmt_pct((cogs or 0) / revenue) if revenue else "—",
+                        _fmt_pct(gross / revenue) if revenue else "—",
+                        _fmt_pct(opex / revenue) if revenue else "—",
+                        _fmt_pct(op / revenue) if revenue else "—",
+                        _fmt_pct(ni / revenue) if revenue else "—",
+                    ],
+                }
+            )
             st.dataframe(cs, use_container_width=True, hide_index=True)
         else:
             st.info("Not enough income-statement detail for a waterfall view.")
@@ -912,15 +1111,33 @@ with tab_deep:
         if ta and tl is not None and eq is not None:
             nca = ta - (ca or 0)
             ncl = max((tl or 0) - (cl or 0), 0)
-            bs_df = pd.DataFrame([
-                {"Side": "Assets", "Bucket": "Current assets", "Amount": ca or 0},
-                {"Side": "Assets", "Bucket": "Non-current assets", "Amount": nca},
-                {"Side": "Liabilities + Equity", "Bucket": "Current liabilities", "Amount": cl or 0},
-                {"Side": "Liabilities + Equity", "Bucket": "Non-current liabilities", "Amount": ncl},
-                {"Side": "Liabilities + Equity", "Bucket": "Stockholders' equity", "Amount": eq},
-            ])
+            bs_df = pd.DataFrame(
+                [
+                    {"Side": "Assets", "Bucket": "Current assets", "Amount": ca or 0},
+                    {"Side": "Assets", "Bucket": "Non-current assets", "Amount": nca},
+                    {
+                        "Side": "Liabilities + Equity",
+                        "Bucket": "Current liabilities",
+                        "Amount": cl or 0,
+                    },
+                    {
+                        "Side": "Liabilities + Equity",
+                        "Bucket": "Non-current liabilities",
+                        "Amount": ncl,
+                    },
+                    {
+                        "Side": "Liabilities + Equity",
+                        "Bucket": "Stockholders' equity",
+                        "Amount": eq,
+                    },
+                ]
+            )
             fig = px.bar(
-                bs_df, x="Side", y="Amount", color="Bucket", text_auto=".2s",
+                bs_df,
+                x="Side",
+                y="Amount",
+                color="Bucket",
+                text_auto=".2s",
                 title=f"{deep_ticker} FY{fy} — Balance Sheet ($)",
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -945,19 +1162,34 @@ with tab_deep:
             "The OCF-to-NI ratio is the single best earnings-quality tell."
         )
         capex = _safe(cur["capex"])
-        cf_df = pd.DataFrame([
-            {"Metric": "Operating Cash Flow", "Value": ocf or 0},
-            {"Metric": "CapEx", "Value": -(abs(capex) if capex else 0)},
-            {"Metric": "Free Cash Flow", "Value": fcf or 0},
-            {"Metric": "Net Income", "Value": ni or 0},
-        ])
-        fig = px.bar(cf_df, x="Metric", y="Value", text_auto=".2s", title=f"{deep_ticker} FY{fy} — Cash Flow vs Earnings")
+        cf_df = pd.DataFrame(
+            [
+                {"Metric": "Operating Cash Flow", "Value": ocf or 0},
+                {"Metric": "CapEx", "Value": -(abs(capex) if capex else 0)},
+                {"Metric": "Free Cash Flow", "Value": fcf or 0},
+                {"Metric": "Net Income", "Value": ni or 0},
+            ]
+        )
+        fig = px.bar(
+            cf_df,
+            x="Metric",
+            y="Value",
+            text_auto=".2s",
+            title=f"{deep_ticker} FY{fy} — Cash Flow vs Earnings",
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         cfi = _safe(cur_r.get("cash_flow_to_income"))
         q1, q2 = st.columns(2)
-        q1.metric("OCF / Net Income", _fmt_x(cfi), help="≥1.0 is the healthy zone. <0.8 for multiple years is a red flag.")
-        q2.metric("FCF Margin", _fmt_pct((fcf / revenue) if (fcf is not None and revenue) else None))
+        q1.metric(
+            "OCF / Net Income",
+            _fmt_x(cfi),
+            help="≥1.0 is the healthy zone. <0.8 for multiple years is a red flag.",
+        )
+        q2.metric(
+            "FCF Margin",
+            _fmt_pct((fcf / revenue) if (fcf is not None and revenue) else None),
+        )
 
         # --- Working-capital efficiency ---
         st.subheader("Working-Capital Efficiency")
@@ -968,37 +1200,70 @@ with tab_deep:
         dso = _safe(cur_r.get("days_sales_outstanding"))
         dio = _safe(cur_r.get("days_inventory_outstanding"))
         w1, w2, w3 = st.columns(3)
-        w1.metric("Days Sales Outstanding", f"{dso:.0f} days" if dso is not None else "—")
-        w2.metric("Days Inventory Outstanding", f"{dio:.0f} days" if dio is not None else "—")
+        w1.metric(
+            "Days Sales Outstanding", f"{dso:.0f} days" if dso is not None else "—"
+        )
+        w2.metric(
+            "Days Inventory Outstanding", f"{dio:.0f} days" if dio is not None else "—"
+        )
         w3.metric("Asset Turnover", _fmt_x(cur_r.get("asset_turnover")))
 
         # --- Red flags checklist ---
         st.subheader("Red Flags")
-        st.caption("Rules-based scan over the latest two fiscal years. Not a recommendation — a starting point for investigation.")
+        st.caption(
+            "Rules-based scan over the latest two fiscal years. Not a recommendation — a starting point for investigation."
+        )
         flags = []
         if ocf is not None and ni is not None and ni > 0 and ocf < 0.8 * ni:
-            flags.append(f"Operating cash flow ({_fmt_money(ocf)}) is well below net income ({_fmt_money(ni)}) — earnings quality concern.")
+            flags.append(
+                f"Operating cash flow ({_fmt_money(ocf)}) is well below net income ({_fmt_money(ni)}) — earnings quality concern."
+            )
         if fcf is not None and fcf < 0 and ni is not None and ni > 0:
-            flags.append("Free cash flow is negative despite positive net income — capex or working-capital drag.")
+            flags.append(
+                "Free cash flow is negative despite positive net income — capex or working-capital drag."
+            )
         if cur_r.get("current_ratio") is not None and cur_r["current_ratio"] < 1.0:
-            flags.append(f"Current ratio below 1.0 ({_fmt_x(cur_r['current_ratio'])}) — short-term liquidity under pressure.")
+            flags.append(
+                f"Current ratio below 1.0 ({_fmt_x(cur_r['current_ratio'])}) — short-term liquidity under pressure."
+            )
         if cur_r.get("debt_to_equity") is not None and cur_r["debt_to_equity"] > 2.0:
-            flags.append(f"Debt/equity above 2.0 ({_fmt_x(cur_r['debt_to_equity'])}) — elevated financial leverage.")
+            flags.append(
+                f"Debt/equity above 2.0 ({_fmt_x(cur_r['debt_to_equity'])}) — elevated financial leverage."
+            )
         if prior_r is not None:
             prior_dso = _safe(prior_r.get("days_sales_outstanding"))
             prior_dio = _safe(prior_r.get("days_inventory_outstanding"))
-            if (dso is not None and prior_dso is not None
-                    and np.isfinite(dso) and np.isfinite(prior_dso) and prior_dso > 0
-                    and dso > prior_dso * 1.2):
-                flags.append("DSO jumped >20% YoY — receivables are aging faster than sales are growing.")
-            if (dio is not None and prior_dio is not None
-                    and np.isfinite(dio) and np.isfinite(prior_dio) and prior_dio > 0
-                    and dio > prior_dio * 1.2):
-                flags.append("DIO jumped >20% YoY — inventory is building up relative to COGS.")
-            if prior_r.get("net_profit_margin") is not None and cur_r.get("net_profit_margin") is not None:
+            if (
+                dso is not None
+                and prior_dso is not None
+                and np.isfinite(dso)
+                and np.isfinite(prior_dso)
+                and prior_dso > 0
+                and dso > prior_dso * 1.2
+            ):
+                flags.append(
+                    "DSO jumped >20% YoY — receivables are aging faster than sales are growing."
+                )
+            if (
+                dio is not None
+                and prior_dio is not None
+                and np.isfinite(dio)
+                and np.isfinite(prior_dio)
+                and prior_dio > 0
+                and dio > prior_dio * 1.2
+            ):
+                flags.append(
+                    "DIO jumped >20% YoY — inventory is building up relative to COGS."
+                )
+            if (
+                prior_r.get("net_profit_margin") is not None
+                and cur_r.get("net_profit_margin") is not None
+            ):
                 delta = cur_r["net_profit_margin"] - prior_r["net_profit_margin"]
                 if delta < -0.03:
-                    flags.append(f"Net margin contracted by {abs(delta) * 100:.1f}pp YoY.")
+                    flags.append(
+                        f"Net margin contracted by {abs(delta) * 100:.1f}pp YoY."
+                    )
 
         if flags:
             for f in flags:
@@ -1018,20 +1283,27 @@ with tab_perf:
         "between the two lines usually flags margin pressure or one-time charges."
     )
 
-    rev_data = query(f"""
+    rev_data = query(
+        f"""
         SELECT ticker, fiscal_year, revenue, net_income
         FROM analytics.financial_ratios
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
           AND revenue IS NOT NULL AND revenue > 0
         ORDER BY fiscal_year
-    """, available)
+    """,
+        available,
+    )
 
     col1, col2 = st.columns(2)
     with col1:
         fig = px.line(
-            rev_data, x="fiscal_year", y="revenue", color="ticker",
-            title="Revenue Over Time", labels={"revenue": "Revenue ($)", "fiscal_year": "Year"},
+            rev_data,
+            x="fiscal_year",
+            y="revenue",
+            color="ticker",
+            title="Revenue Over Time",
+            labels={"revenue": "Revenue ($)", "fiscal_year": "Year"},
             markers=True,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -1039,8 +1311,11 @@ with tab_perf:
     with col2:
         fig = px.line(
             rev_data.dropna(subset=["net_income"]),
-            x="fiscal_year", y="net_income", color="ticker",
-            title="Net Income Over Time", labels={"net_income": "Net Income ($)", "fiscal_year": "Year"},
+            x="fiscal_year",
+            y="net_income",
+            color="ticker",
+            title="Net Income Over Time",
+            labels={"net_income": "Net Income ($)", "fiscal_year": "Year"},
             markers=True,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -1053,18 +1328,26 @@ with tab_perf:
         "Rising margins = pricing power or operating leverage; falling margins = cost pressure or mix shift."
     )
 
-    margins = query(f"""
+    margins = query(
+        f"""
         SELECT ticker, fiscal_year, gross_margin, operating_margin, net_profit_margin
         FROM analytics.financial_ratios
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """, available)
+    """,
+        available,
+    )
 
-    margin_type = st.selectbox("Margin", ["operating_margin", "net_profit_margin", "gross_margin"])
+    margin_type = st.selectbox(
+        "Margin", ["operating_margin", "net_profit_margin", "gross_margin"]
+    )
     margin_plot = clip_outliers(margins.dropna(subset=[margin_type]), margin_type)
     fig = px.line(
-        margin_plot, x="fiscal_year", y=margin_type, color="ticker",
+        margin_plot,
+        x="fiscal_year",
+        y=margin_type,
+        color="ticker",
         title=f"{margin_type.replace('_', ' ').title()} Over Time",
         labels={margin_type: "Ratio", "fiscal_year": "Year"},
         markers=True,
@@ -1080,21 +1363,27 @@ with tab_perf:
         "(operating leverage kicking in)."
     )
 
-    yoy = query(f"""
+    yoy = query(
+        f"""
         SELECT ticker, fiscal_year, revenue_growth, net_income_growth, operating_income_growth
         FROM analytics.yoy_trends
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """, available)
+    """,
+        available,
+    )
     yoy = clip_outliers(clip_outliers(yoy, "revenue_growth"), "net_income_growth")
 
     col1, col2 = st.columns(2)
     with col1:
         fig = px.bar(
             yoy.dropna(subset=["revenue_growth"]),
-            x="fiscal_year", y="revenue_growth", color="ticker",
-            barmode="group", title="Revenue Growth (YoY)",
+            x="fiscal_year",
+            y="revenue_growth",
+            color="ticker",
+            barmode="group",
+            title="Revenue Growth (YoY)",
             labels={"revenue_growth": "Growth Rate", "fiscal_year": "Year"},
         )
         fig.update_layout(yaxis_tickformat=".1%")
@@ -1103,8 +1392,11 @@ with tab_perf:
     with col2:
         fig = px.bar(
             yoy.dropna(subset=["net_income_growth"]),
-            x="fiscal_year", y="net_income_growth", color="ticker",
-            barmode="group", title="Net Income Growth (YoY)",
+            x="fiscal_year",
+            y="net_income_growth",
+            color="ticker",
+            barmode="group",
+            title="Net Income Growth (YoY)",
             labels={"net_income_growth": "Growth Rate", "fiscal_year": "Year"},
         )
         fig.update_layout(yaxis_tickformat=".1%")
@@ -1118,7 +1410,8 @@ with tab_perf:
         "Two companies with the same ROE can get there very differently — this chart shows how."
     )
 
-    dupont = query(f"""
+    dupont = query(
+        f"""
         SELECT ticker, fiscal_year,
                dupont_net_margin, dupont_asset_turnover,
                dupont_equity_multiplier, dupont_roe
@@ -1126,21 +1419,50 @@ with tab_perf:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """, available)
+    """,
+        available,
+    )
 
     dupont_ticker = st.selectbox("Company (DuPont)", available)
     dt = dupont[dupont["ticker"] == dupont_ticker].dropna(
-        subset=["dupont_net_margin", "dupont_asset_turnover", "dupont_equity_multiplier"],
+        subset=[
+            "dupont_net_margin",
+            "dupont_asset_turnover",
+            "dupont_equity_multiplier",
+        ],
         how="all",
     )
 
     if not dt.empty:
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_net_margin"], name="Net Margin"))
-        fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_asset_turnover"], name="Asset Turnover"))
-        fig.add_trace(go.Bar(x=dt["fiscal_year"], y=dt["dupont_equity_multiplier"], name="Equity Multiplier"))
-        fig.add_trace(go.Scatter(x=dt["fiscal_year"], y=dt["dupont_roe"], name="ROE", mode="lines+markers"))
-        fig.update_layout(title=f"{dupont_ticker} — DuPont Decomposition", barmode="group")
+        fig.add_trace(
+            go.Bar(x=dt["fiscal_year"], y=dt["dupont_net_margin"], name="Net Margin")
+        )
+        fig.add_trace(
+            go.Bar(
+                x=dt["fiscal_year"],
+                y=dt["dupont_asset_turnover"],
+                name="Asset Turnover",
+            )
+        )
+        fig.add_trace(
+            go.Bar(
+                x=dt["fiscal_year"],
+                y=dt["dupont_equity_multiplier"],
+                name="Equity Multiplier",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=dt["fiscal_year"],
+                y=dt["dupont_roe"],
+                name="ROE",
+                mode="lines+markers",
+            )
+        )
+        fig.update_layout(
+            title=f"{dupont_ticker} — DuPont Decomposition", barmode="group"
+        )
         st.plotly_chart(fig, use_container_width=True)
 
     # --- Liquidity & Leverage ---
@@ -1153,22 +1475,28 @@ with tab_solv:
         "structure is borrowed; higher means more financial risk but also more potential upside."
     )
 
-    ratios = query(f"""
+    ratios = query(
+        f"""
         SELECT ticker, fiscal_year, current_ratio, quick_ratio,
                debt_to_equity, debt_to_assets
         FROM analytics.financial_ratios
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """, available)
+    """,
+        available,
+    )
     ratios = clip_outliers(clip_outliers(ratios, "current_ratio"), "debt_to_equity")
 
     col1, col2 = st.columns(2)
     with col1:
         fig = px.line(
             ratios.dropna(subset=["current_ratio"]),
-            x="fiscal_year", y="current_ratio", color="ticker",
-            title="Current Ratio", labels={"current_ratio": "Ratio", "fiscal_year": "Year"},
+            x="fiscal_year",
+            y="current_ratio",
+            color="ticker",
+            title="Current Ratio",
+            labels={"current_ratio": "Ratio", "fiscal_year": "Year"},
             markers=True,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -1176,8 +1504,11 @@ with tab_solv:
     with col2:
         fig = px.line(
             ratios.dropna(subset=["debt_to_equity"]),
-            x="fiscal_year", y="debt_to_equity", color="ticker",
-            title="Debt-to-Equity", labels={"debt_to_equity": "Ratio", "fiscal_year": "Year"},
+            x="fiscal_year",
+            y="debt_to_equity",
+            color="ticker",
+            title="Debt-to-Equity",
+            labels={"debt_to_equity": "Ratio", "fiscal_year": "Year"},
             markers=True,
         )
         st.plotly_chart(fig, use_container_width=True)
@@ -1192,7 +1523,8 @@ with tab_sent:
         "net sentiment is worth a second look."
     )
 
-    sentiment = query(f"""
+    sentiment = query(
+        f"""
         SELECT ticker, fiscal_year, section_type,
                net_sentiment, positive_pct, negative_pct,
                uncertainty_pct, risk_themes, word_count
@@ -1200,15 +1532,22 @@ with tab_sent:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY ticker, fiscal_year
-    """, available)
+    """,
+        available,
+    )
 
     if not sentiment.empty:
         col1, col2 = st.columns(2)
         with col1:
-            rf = sentiment[sentiment["section_type"] == "RISK_FACTORS"].dropna(subset=["net_sentiment"])
+            rf = sentiment[sentiment["section_type"] == "RISK_FACTORS"].dropna(
+                subset=["net_sentiment"]
+            )
             if not rf.empty:
                 fig = px.line(
-                    rf, x="fiscal_year", y="net_sentiment", color="ticker",
+                    rf,
+                    x="fiscal_year",
+                    y="net_sentiment",
+                    color="ticker",
                     title="Risk Factors — Net Sentiment",
                     labels={"net_sentiment": "Net Sentiment", "fiscal_year": "Year"},
                     markers=True,
@@ -1216,10 +1555,15 @@ with tab_sent:
                 st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            mda = sentiment[sentiment["section_type"] == "MDA"].dropna(subset=["net_sentiment"])
+            mda = sentiment[sentiment["section_type"] == "MDA"].dropna(
+                subset=["net_sentiment"]
+            )
             if not mda.empty:
                 fig = px.line(
-                    mda, x="fiscal_year", y="net_sentiment", color="ticker",
+                    mda,
+                    x="fiscal_year",
+                    y="net_sentiment",
+                    color="ticker",
                     title="MD&A — Net Sentiment",
                     labels={"net_sentiment": "Net Sentiment", "fiscal_year": "Year"},
                     markers=True,
@@ -1227,20 +1571,22 @@ with tab_sent:
                 st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("Risk Themes Detected")
-        st.caption("Keyword-tagged risk categories surfaced from each filing's Risk Factors section.")
+        st.caption(
+            "Keyword-tagged risk categories surfaced from each filing's Risk Factors section."
+        )
         with st.expander("What each theme means", expanded=False):
             st.markdown(
                 "- **cyber** — data breach, ransomware, phishing, information-security failures, "
-                "hacking incidents. *e.g. \"a successful cyberattack could compromise customer data.\"*\n"
+                'hacking incidents. *e.g. "a successful cyberattack could compromise customer data."*\n'
                 "- **climate** — greenhouse-gas emissions, carbon regulation, sustainability mandates, "
-                "extreme-weather disruption, transition to renewables. *e.g. \"evolving climate regulations "
-                "may increase our compliance costs.\"*\n"
+                'extreme-weather disruption, transition to renewables. *e.g. "evolving climate regulations '
+                'may increase our compliance costs."*\n'
                 "- **regulatory** — new legislation, antitrust scrutiny, SEC/FTC actions, licensing and "
-                "compliance burdens. *e.g. \"pending antitrust investigations could limit acquisitions.\"*\n"
+                'compliance burdens. *e.g. "pending antitrust investigations could limit acquisitions."*\n'
                 "- **supply_chain** — supplier concentration, component shortages, logistics disruptions, "
-                "inventory-risk events. *e.g. \"a single-source supplier failure could halt production.\"*\n"
+                'inventory-risk events. *e.g. "a single-source supplier failure could halt production."*\n'
                 "- **macro** — inflation, recession, interest-rate moves, geopolitical conflict, tariffs, "
-                "trade wars, pandemics. *e.g. \"persistent inflation may pressure consumer demand.\"*"
+                'trade wars, pandemics. *e.g. "persistent inflation may pressure consumer demand."*'
             )
         themes = sentiment[sentiment["risk_themes"].notna()][
             ["ticker", "fiscal_year", "section_type", "risk_themes"]
@@ -1254,7 +1600,9 @@ with tab_sent:
 
 with tab_data:
     st.header("Data Explorer")
-    st.caption("Browse the underlying tables. Useful for sanity-checking anything above.")
+    st.caption(
+        "Browse the underlying tables. Useful for sanity-checking anything above."
+    )
 
     ALLOWED_TABLES = {
         "analytics.financial_ratios": "fiscal_year",
@@ -1268,10 +1616,12 @@ with tab_data:
         st.error("Invalid table selection.")
         st.stop()
     order_col = ALLOWED_TABLES[table]
-    explorer_df = query(f"""
+    explorer_df = query(
+        f"""
         SELECT * FROM {table}
         WHERE ticker IN ({placeholders})
         ORDER BY ticker, {order_col}
-    """, available)
+    """,
+        available,
+    )
     st.dataframe(explorer_df, use_container_width=True, hide_index=True)
-

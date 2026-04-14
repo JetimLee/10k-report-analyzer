@@ -1,4 +1,4 @@
-""" @bruin
+"""@bruin
 name: raw.financial_statements
 type: python
 depends:
@@ -12,14 +12,16 @@ columns:
     type: string
     checks:
       - name: not_null
-@bruin """
+@bruin"""
 
 import os
 import duckdb
 import requests
 import time
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db"))
+DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db")
+)
 
 
 def connect_db(retries=15, delay=2):
@@ -32,6 +34,7 @@ def connect_db(retries=15, delay=2):
                 time.sleep(delay)
             else:
                 raise
+
 
 HEADERS = {
     "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
@@ -101,16 +104,18 @@ def extract_facts(facts_json, ticker, company_name):
                 if value is None or fiscal_year is None:
                     continue
 
-                rows.append((
-                    ticker,
-                    company_name,
-                    metric_name,
-                    float(value),
-                    fiscal_year,
-                    fiscal_period,
-                    period_end,
-                    filed,
-                ))
+                rows.append(
+                    (
+                        ticker,
+                        company_name,
+                        metric_name,
+                        float(value),
+                        fiscal_year,
+                        fiscal_period,
+                        period_end,
+                        filed,
+                    )
+                )
     return rows
 
 

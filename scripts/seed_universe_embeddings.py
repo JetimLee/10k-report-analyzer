@@ -34,7 +34,9 @@ HEADERS = {
 }
 
 SECTION_START = re.compile(r"Item\s+1[\.\s\-\u2013\u2014]+Business", re.IGNORECASE)
-SECTION_END = re.compile(r"Item\s+(?:1A|1B|1C|2|7A|8)[\.\s\-\u2013\u2014]", re.IGNORECASE)
+SECTION_END = re.compile(
+    r"Item\s+(?:1A|1B|1C|2|7A|8)[\.\s\-\u2013\u2014]", re.IGNORECASE
+)
 CROSS_REF = re.compile(
     r"(?:see|per|under|in|to|of|from|pursuant to|refer to|included in|contained in)\s*$",
     re.IGNORECASE,
@@ -46,10 +48,12 @@ HTML_ENTITY = re.compile(r"&(?:[a-zA-Z]+|#\d+);")
 def fetch_sp500():
     """Scrape the S&P 500 constituents list from Wikipedia."""
     print("Fetching S&P 500 list from Wikipedia…")
-    resp = requests.get(WIKI_SP500_URL, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=30)
+    resp = requests.get(
+        WIKI_SP500_URL, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=30
+    )
     resp.raise_for_status()
     # Quick-and-dirty: find all <td><a ...>TICKER</a> patterns in the first table
-    rows = re.findall(r'<td><a [^>]*>([A-Z][A-Z0-9\.\-]{0,5})</a>', resp.text)
+    rows = re.findall(r"<td><a [^>]*>([A-Z][A-Z0-9\.\-]{0,5})</a>", resp.text)
     tickers = sorted({t.replace(".", "-") for t in rows})
     print(f"  Found {len(tickers)} tickers")
     return tickers
@@ -63,7 +67,7 @@ def fetch_nasdaq100():
     )
     resp.raise_for_status()
     # The constituents table uses <td><a ...>TICKER</a> for the symbol column.
-    rows = re.findall(r'<td><a [^>]*>([A-Z][A-Z0-9\.\-]{0,5})</a>', resp.text)
+    rows = re.findall(r"<td><a [^>]*>([A-Z][A-Z0-9\.\-]{0,5})</a>", resp.text)
     tickers = sorted({t.replace(".", "-") for t in rows})
     print(f"  Found {len(tickers)} tickers")
     return tickers
@@ -86,7 +90,11 @@ def load_tickers_file(path):
         if reader and "ticker" in reader.fieldnames:
             return [r["ticker"].strip().upper() for r in reader if r["ticker"].strip()]
         f.seek(0)
-        return [line.strip().upper() for line in f if line.strip() and not line.startswith("#")]
+        return [
+            line.strip().upper()
+            for line in f
+            if line.strip() and not line.startswith("#")
+        ]
 
 
 def get_cik_map():
@@ -128,10 +136,10 @@ def extract_business(html):
     if not matches:
         return None
     for m in reversed(matches):
-        remaining = text[m.end():]
+        remaining = text[m.end() :]
         end = None
         for cand in SECTION_END.finditer(remaining):
-            before = remaining[max(0, cand.start() - 30):cand.start()]
+            before = remaining[max(0, cand.start() - 30) : cand.start()]
             if CROSS_REF.search(before):
                 continue
             end = cand
@@ -179,8 +187,12 @@ def main():
         choices=["sp500", "nasdaq100", "sp500+nasdaq100"],
         help="Which index to seed (ignored if --tickers is given)",
     )
-    ap.add_argument("--limit", type=int, help="Only process first N tickers (smoke test)")
-    ap.add_argument("--force", action="store_true", help="Re-embed even if already cached")
+    ap.add_argument(
+        "--limit", type=int, help="Only process first N tickers (smoke test)"
+    )
+    ap.add_argument(
+        "--force", action="store_true", help="Re-embed even if already cached"
+    )
     args = ap.parse_args()
 
     if args.tickers:
@@ -204,10 +216,18 @@ def main():
         already[t] = fy
 
     from sentence_transformers import SentenceTransformer
+
     print(f"Loading {MODEL_NAME}…")
     model = SentenceTransformer(MODEL_NAME)
 
-    stats = {"embedded": 0, "skipped": 0, "no_cik": 0, "no_filing": 0, "no_section": 0, "error": 0}
+    stats = {
+        "embedded": 0,
+        "skipped": 0,
+        "no_cik": 0,
+        "no_filing": 0,
+        "no_section": 0,
+        "error": 0,
+    }
     to_commit = []
 
     for i, ticker in enumerate(tickers, 1):
@@ -250,12 +270,20 @@ def main():
             continue
 
         vec = model.encode(body[:MAX_CHARS], normalize_embeddings=True).tolist()
-        to_commit.append((
-            ticker, cik, info["company_name"], filing["fiscal_year"],
-            vec, len(body),
-        ))
+        to_commit.append(
+            (
+                ticker,
+                cik,
+                info["company_name"],
+                filing["fiscal_year"],
+                vec,
+                len(body),
+            )
+        )
         stats["embedded"] += 1
-        print(f"[{i}/{len(tickers)}] {ticker} FY{filing['fiscal_year']} ✓ ({len(body)} chars)")
+        print(
+            f"[{i}/{len(tickers)}] {ticker} FY{filing['fiscal_year']} ✓ ({len(body)} chars)"
+        )
 
         # Flush every 25 records so a crash doesn't lose everything
         if len(to_commit) >= 25:
@@ -273,7 +301,9 @@ def main():
             to_commit,
         )
 
-    total = con.execute("SELECT count(*) FROM analytics.sec_universe_embeddings").fetchone()[0]
+    total = con.execute(
+        "SELECT count(*) FROM analytics.sec_universe_embeddings"
+    ).fetchone()[0]
     con.close()
 
     print("\n=== Summary ===")

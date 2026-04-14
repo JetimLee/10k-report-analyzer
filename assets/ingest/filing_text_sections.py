@@ -1,4 +1,4 @@
-""" @bruin
+"""@bruin
 name: raw.filing_text_sections
 type: python
 depends:
@@ -19,7 +19,7 @@ columns:
           - "MDA"
           - "RISK_FACTORS"
           - "BUSINESS"
-@bruin """
+@bruin"""
 
 import os
 import duckdb
@@ -27,7 +27,9 @@ import re
 import requests
 import time
 
-DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db"))
+DB_PATH = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "ten_k.db")
+)
 
 
 def connect_db(retries=15, delay=2):
@@ -40,6 +42,7 @@ def connect_db(retries=15, delay=2):
                 time.sleep(delay)
             else:
                 raise
+
 
 HEADERS = {
     "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
@@ -74,7 +77,7 @@ CROSS_REF_PREFIXES = re.compile(
 
 def is_cross_reference(text, match_start, window=30):
     """True if the match is preceded by a cross-reference word like 'See'."""
-    before = text[max(0, match_start - window):match_start]
+    before = text[max(0, match_start - window) : match_start]
     return bool(CROSS_REF_PREFIXES.search(before))
 
 
@@ -108,7 +111,7 @@ def extract_section(full_text, section_type):
     all_matches.sort(key=lambda m: m.start(), reverse=True)
 
     for start_match in all_matches:
-        remaining = cleaned[start_match.end():]
+        remaining = cleaned[start_match.end() :]
 
         # Find the first NEXT_SECTION match that is NOT a cross-reference.
         end_match = None
@@ -121,7 +124,7 @@ def extract_section(full_text, section_type):
                 break  # first real boundary wins for this pattern
 
         if end_match:
-            section_text = remaining[:end_match.start()].strip()
+            section_text = remaining[: end_match.start()].strip()
         else:
             section_text = remaining[:50000].strip()
 
@@ -173,15 +176,17 @@ def materialize(context):
             for section_type in ["BUSINESS", "MDA", "RISK_FACTORS"]:
                 section_text = extract_section(full_text, section_type)
                 if section_text and len(section_text) > 100:
-                    rows.append((
-                        ticker,
-                        company_name,
-                        fiscal_year,
-                        accession,
-                        section_type,
-                        section_text,
-                        len(section_text),
-                    ))
+                    rows.append(
+                        (
+                            ticker,
+                            company_name,
+                            fiscal_year,
+                            accession,
+                            section_type,
+                            section_text,
+                            len(section_text),
+                        )
+                    )
                     print(f"  {section_type}: {len(section_text)} chars")
                 else:
                     print(f"  {section_type}: not found or too short")
