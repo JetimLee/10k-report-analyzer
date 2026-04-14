@@ -12,6 +12,9 @@ services:
       # Shadow the host's .venv with an empty anonymous volume so Bruin/Poetry
       # don't try to reuse a broken macOS virtualenv inside the Linux container.
       - /app/.venv
+    environment:
+      # SEC requires a User-Agent identifying your app + contact email.
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-10KAnalyzer contact@example.com}
     restart: unless-stopped
 
   pipeline:
@@ -21,5 +24,7 @@ services:
     volumes:
       - .:/app
       - /app/.venv
+    environment:
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-10KAnalyzer contact@example.com}
     command: ["bruin", "run", "."]
     profiles: ["run"]

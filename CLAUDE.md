@@ -108,5 +108,5 @@ con.close()
 ## Troubleshooting
 - If `bruin run` fails on Python assets, ensure `duckdb` and `requests` are installed in the Python environment Bruin uses.
 - SEC EDGAR may rate-limit aggressively. If you see 403 errors, wait a minute and retry.
-- The `User-Agent` header in ingest scripts must identify your application per SEC policy.
+- The `User-Agent` header in ingest scripts must identify your application per SEC policy. Set `SEC_USER_AGENT="YourApp your-email@example.com"` in `.env` (or export it before running locally). Falls back to a generic placeholder if unset — don't rely on the placeholder for real ingestion, SEC may block it.
 - **`IsADirectoryError: .sic_cache.json`**: a prior docker-compose config bind-mounted this file before it existed, causing Docker to create it as an empty directory. Fix: `docker compose down && rm -rf .sic_cache.json && docker compose up`. Current `docker-compose.yml` bind-mounts the whole project directory instead to avoid this class of bug.

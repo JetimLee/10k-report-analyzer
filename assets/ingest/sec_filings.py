@@ -52,7 +52,7 @@ def load_tickers():
     return tickers
 
 HEADERS = {
-    "User-Agent": "10KAnalyzer gavincoulson1@gmail.com",
+    "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
     "Accept-Encoding": "gzip, deflate",
 }
 

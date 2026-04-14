@@ -92,7 +92,7 @@ poetry run streamlit run dashboard.py
 ## Configuration
 
 - **Tickers** — edit `tickers.csv` at the project root (one ticker per line with a `ticker` header) or manage them from the dashboard sidebar.
-- **SEC User-Agent** — set in the ingest scripts (SEC requires an identifying string).
+- **SEC User-Agent** — set via the `SEC_USER_AGENT` env var (SEC requires a header identifying your app + contact email). Copy `.env.example` to `.env` and fill it in; `docker compose` picks it up automatically.
 - **Bruin connections** — see `.bruin.yml`.
 
 ## Pinned Versions

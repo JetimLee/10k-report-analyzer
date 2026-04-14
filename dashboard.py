@@ -18,7 +18,7 @@ TICKERS_CSV = "tickers.csv"
 SIC_CACHE_PATH = ".sic_cache.json"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_HEADERS = {
-    "User-Agent": "10KAnalyzer gavincoulson1@gmail.com",
+    "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
     "Accept-Encoding": "gzip, deflate",
 }
 STOPWORDS = {
