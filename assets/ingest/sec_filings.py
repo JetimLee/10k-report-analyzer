@@ -121,12 +121,32 @@ def get_10k_filings(cik):
                     f"{cik.lstrip('0')}/{accession_dashed}/"
                 ),
             })
-    return filings
+    form_counts = {}
+    for f in forms:
+        form_counts[f] = form_counts.get(f, 0) + 1
+    return filings, form_counts
+
+
+def record_status(con, ticker, status, message):
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS config.ingest_status (
+            ticker VARCHAR PRIMARY KEY,
+            status VARCHAR,
+            message VARCHAR,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    con.execute(
+        "INSERT OR REPLACE INTO config.ingest_status(ticker, status, message, updated_at) "
+        "VALUES (?, ?, ?, now())",
+        [ticker, status, message],
+    )
 
 
 def materialize(context):
     con = connect_db()
     con.execute("CREATE SCHEMA IF NOT EXISTS raw")
+    con.execute("CREATE SCHEMA IF NOT EXISTS config")
 
     con.execute("""
         CREATE TABLE IF NOT EXISTS raw.sec_filings (
@@ -152,10 +172,23 @@ def materialize(context):
     cik_map = get_cik_map()
     time.sleep(0.15)
 
+    # Clear prior status rows for this run
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS config.ingest_status (
+            ticker VARCHAR PRIMARY KEY,
+            status VARCHAR,
+            message VARCHAR,
+            updated_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    con.execute("DELETE FROM config.ingest_status WHERE ticker IN (SELECT ticker FROM config.selected_tickers)")
+
     rows = []
     for ticker in tickers:
         if ticker not in cik_map:
-            print(f"Warning: {ticker} not found in SEC CIK map, skipping")
+            msg = "Ticker not found in SEC company_tickers.json (unknown or delisted)."
+            print(f"Warning: {ticker}: {msg}")
+            record_status(con, ticker, "unknown_ticker", msg)
             continue
 
         info = cik_map[ticker]
@@ -163,7 +196,41 @@ def materialize(context):
         company_name = info["company_name"]
 
         print(f"Fetching 10-K filings for {ticker} (CIK: {cik})...")
-        filings = get_10k_filings(cik)
+        try:
+            filings, form_counts = get_10k_filings(cik)
+        except Exception as e:
+            msg = f"SEC submissions fetch failed: {e}"
+            print(f"  {ticker}: {msg}")
+            record_status(con, ticker, "error", msg)
+            time.sleep(0.15)
+            continue
+
+        if not filings:
+            if form_counts.get("20-F", 0) > 0 or form_counts.get("20-F/A", 0) > 0:
+                msg = (
+                    "Foreign private issuer — files 20-F (IFRS), not 10-K. "
+                    "This pipeline currently only supports 10-K / US GAAP filers."
+                )
+                status = "not_10k_filer"
+            elif form_counts.get("40-F", 0) > 0:
+                msg = "Canadian filer — files 40-F, not 10-K. Not supported by this pipeline."
+                status = "not_10k_filer"
+            elif form_counts.get("10-K/A", 0) > 0 and not form_counts.get("10-K"):
+                msg = "Only 10-K/A amendments found; no original 10-K in recent history."
+                status = "no_10k"
+            elif not form_counts:
+                msg = "No filings returned by SEC submissions API."
+                status = "no_filings"
+            else:
+                top_forms = ", ".join(
+                    f"{k} ({v})" for k, v in sorted(form_counts.items(), key=lambda kv: -kv[1])[:4]
+                )
+                msg = f"No 10-K in recent filings. Found: {top_forms}."
+                status = "no_10k"
+            print(f"  {ticker}: {msg}")
+            record_status(con, ticker, status, msg)
+            time.sleep(0.15)
+            continue
 
         for f in filings:
             rows.append((
@@ -177,6 +244,7 @@ def materialize(context):
                 f["filing_url"],
                 f["index_url"],
             ))
+        record_status(con, ticker, "ingested", f"{len(filings)} 10-K filing(s) ingested.")
 
         # SEC rate limit: 10 req/sec
         time.sleep(0.15)

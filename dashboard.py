@@ -49,9 +49,9 @@ st.set_page_config(page_title="10-K Analyzer", layout="wide")
 st.title("10-K Financial Analyzer")
 
 
-def query(sql):
+def query(sql, params=None):
     con = duckdb.connect(DB_PATH, read_only=True)
-    df = con.execute(sql).df()
+    df = con.execute(sql, params or []).df()
     con.close()
     return clean_df(df)
 
@@ -184,6 +184,27 @@ def _connect_writable(retries=15, delay=2):
                 time.sleep(delay)
             else:
                 raise
+
+
+def read_ingest_status(tickers):
+    """Return {ticker: (status, message)} for the given tickers, if recorded."""
+    if not tickers:
+        return {}
+    try:
+        con = duckdb.connect(DB_PATH, read_only=True)
+    except duckdb.IOException:
+        return {}
+    try:
+        placeholders = ", ".join(["?"] * len(tickers))
+        rows = con.execute(
+            f"SELECT ticker, status, message FROM config.ingest_status WHERE ticker IN ({placeholders})",
+            list(tickers),
+        ).fetchall()
+        return {t: (s, m) for t, s, m in rows}
+    except Exception:
+        return {}
+    finally:
+        con.close()
 
 
 def read_selected_tickers():
@@ -654,11 +675,27 @@ if not selected:
 
 # Only chart tickers that actually have data
 available = [t for t in selected if t in already_ingested]
+missing_after_run = [t for t in selected if t not in already_ingested]
+unexplained = list(missing_after_run)
+if missing_after_run:
+    statuses = read_ingest_status(missing_after_run)
+    for t in missing_after_run:
+        if t in statuses:
+            status, msg = statuses[t]
+            if status == "ingested":
+                continue  # table race — skip
+            st.warning(f"**{t}** — {msg}")
+            unexplained.remove(t)
 if not available:
-    st.warning("None of your selected tickers have been ingested yet. Click **Generate Report**.")
+    if unexplained:
+        st.warning(
+            f"Not yet ingested: {', '.join(unexplained)}. Click **Generate Report** to fetch from SEC."
+        )
+    else:
+        st.info("None of the selected tickers can be analyzed (see warnings above).")
     st.stop()
 
-placeholders = ", ".join(f"'{t}'" for t in available)
+placeholders = ", ".join(["?"] * len(available))
 
 # --- Overview ---
 
@@ -682,7 +719,7 @@ with tab_overview:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year DESC
-    """)
+    """, available)
 
     latest_year = latest.groupby("ticker").first().reset_index()
 
@@ -711,16 +748,16 @@ with tab_deep:
         format_func=lambda t: f"{t} — {label_map.get(t, t)}",
     )
 
-    stmt = query(f"""
+    stmt = query("""
         SELECT * FROM staging.financial_metrics
-        WHERE ticker = '{deep_ticker}' AND fiscal_year IS NOT NULL
+        WHERE ticker = ? AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year DESC
-    """)
-    rat = query(f"""
+    """, [deep_ticker])
+    rat = query("""
         SELECT * FROM analytics.financial_ratios
-        WHERE ticker = '{deep_ticker}' AND fiscal_year IS NOT NULL
+        WHERE ticker = ? AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year DESC
-    """)
+    """, [deep_ticker])
 
     if stmt.empty or rat.empty:
         st.info(f"No financial-statement data for {deep_ticker} yet.")
@@ -786,22 +823,35 @@ with tab_deep:
         at_now = _safe(cur_r.get("asset_turnover"))
         at_prev = _safe(prior_r.get("asset_turnover")) if prior_r is not None else None
 
+        def _cmp(now, prev, op):
+            if now is None or prev is None:
+                return None
+            return op(now, prev)
+
         checks = [
-            ("Profitable", "Net income > 0", ni is not None and ni > 0),
-            ("Cash-generative", "Operating cash flow > 0", ocf is not None and ocf > 0),
-            ("Quality of earnings", "Operating CF ≥ Net Income", (ocf is not None and ni is not None and ocf >= ni)),
-            ("Improving ROA", "ROA higher than prior year", (roa_now is not None and roa_prev is not None and roa_now > roa_prev)),
-            ("Deleveraging", "Debt/assets lower than prior year", (da_now is not None and da_prev is not None and da_now < da_prev)),
-            ("Liquidity trending up", "Current ratio higher than prior year", (cr_now is not None and cr_prev is not None and cr_now > cr_prev)),
-            ("Margin expansion", "Gross margin higher than prior year", (gm_now is not None and gm_prev is not None and gm_now > gm_prev)),
-            ("Asset efficiency up", "Asset turnover higher than prior year", (at_now is not None and at_prev is not None and at_now > at_prev)),
+            ("Profitable", "Net income > 0", (ni > 0) if ni is not None else None),
+            ("Cash-generative", "Operating cash flow > 0", (ocf > 0) if ocf is not None else None),
+            ("Quality of earnings", "Operating CF ≥ Net Income",
+             (ocf >= ni) if (ocf is not None and ni is not None) else None),
+            ("Improving ROA", "ROA higher than prior year", _cmp(roa_now, roa_prev, lambda a, b: a > b)),
+            ("Deleveraging", "Debt/assets lower than prior year", _cmp(da_now, da_prev, lambda a, b: a < b)),
+            ("Liquidity trending up", "Current ratio higher than prior year", _cmp(cr_now, cr_prev, lambda a, b: a > b)),
+            ("Margin expansion", "Gross margin higher than prior year", _cmp(gm_now, gm_prev, lambda a, b: a > b)),
+            ("Asset efficiency up", "Asset turnover higher than prior year", _cmp(at_now, at_prev, lambda a, b: a > b)),
         ]
-        score = sum(1 for _, _, ok in checks if ok)
+        score = sum(1 for _, _, ok in checks if ok is True)
+        n_a = sum(1 for _, _, ok in checks if ok is None)
+        evaluated = len(checks) - n_a
         grade = "Strong" if score >= 6 else ("Mixed" if score >= 3 else "Weak")
         st.metric("Score", f"{score} / 8", delta=grade)
+        if n_a:
+            st.caption(f"{n_a} check(s) N/A — prior-year data missing. Score reflects {evaluated} evaluated checks.")
+
+        def _mark(ok):
+            return "✓" if ok is True else ("N/A" if ok is None else "✗")
 
         check_df = pd.DataFrame(
-            [{"Check": name, "Criterion": desc, "Pass": "✓" if ok else "✗"} for name, desc, ok in checks]
+            [{"Check": name, "Criterion": desc, "Pass": _mark(ok)} for name, desc, ok in checks]
         )
         st.dataframe(check_df, use_container_width=True, hide_index=True)
 
@@ -935,9 +985,15 @@ with tab_deep:
         if cur_r.get("debt_to_equity") is not None and cur_r["debt_to_equity"] > 2.0:
             flags.append(f"Debt/equity above 2.0 ({_fmt_x(cur_r['debt_to_equity'])}) — elevated financial leverage.")
         if prior_r is not None:
-            if dso is not None and prior_r.get("days_sales_outstanding") is not None and dso > prior_r["days_sales_outstanding"] * 1.2:
+            prior_dso = _safe(prior_r.get("days_sales_outstanding"))
+            prior_dio = _safe(prior_r.get("days_inventory_outstanding"))
+            if (dso is not None and prior_dso is not None
+                    and np.isfinite(dso) and np.isfinite(prior_dso) and prior_dso > 0
+                    and dso > prior_dso * 1.2):
                 flags.append("DSO jumped >20% YoY — receivables are aging faster than sales are growing.")
-            if dio is not None and prior_r.get("days_inventory_outstanding") is not None and dio > prior_r["days_inventory_outstanding"] * 1.2:
+            if (dio is not None and prior_dio is not None
+                    and np.isfinite(dio) and np.isfinite(prior_dio) and prior_dio > 0
+                    and dio > prior_dio * 1.2):
                 flags.append("DIO jumped >20% YoY — inventory is building up relative to COGS.")
             if prior_r.get("net_profit_margin") is not None and cur_r.get("net_profit_margin") is not None:
                 delta = cur_r["net_profit_margin"] - prior_r["net_profit_margin"]
@@ -969,7 +1025,7 @@ with tab_perf:
           AND fiscal_year IS NOT NULL
           AND revenue IS NOT NULL AND revenue > 0
         ORDER BY fiscal_year
-    """)
+    """, available)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -1003,7 +1059,7 @@ with tab_perf:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """)
+    """, available)
 
     margin_type = st.selectbox("Margin", ["operating_margin", "net_profit_margin", "gross_margin"])
     margin_plot = clip_outliers(margins.dropna(subset=[margin_type]), margin_type)
@@ -1030,7 +1086,7 @@ with tab_perf:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """)
+    """, available)
     yoy = clip_outliers(clip_outliers(yoy, "revenue_growth"), "net_income_growth")
 
     col1, col2 = st.columns(2)
@@ -1070,7 +1126,7 @@ with tab_perf:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """)
+    """, available)
 
     dupont_ticker = st.selectbox("Company (DuPont)", available)
     dt = dupont[dupont["ticker"] == dupont_ticker].dropna(
@@ -1104,7 +1160,7 @@ with tab_solv:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY fiscal_year
-    """)
+    """, available)
     ratios = clip_outliers(clip_outliers(ratios, "current_ratio"), "debt_to_equity")
 
     col1, col2 = st.columns(2)
@@ -1144,7 +1200,7 @@ with tab_sent:
         WHERE ticker IN ({placeholders})
           AND fiscal_year IS NOT NULL
         ORDER BY ticker, fiscal_year
-    """)
+    """, available)
 
     if not sentiment.empty:
         col1, col2 = st.columns(2)
@@ -1200,19 +1256,22 @@ with tab_data:
     st.header("Data Explorer")
     st.caption("Browse the underlying tables. Useful for sanity-checking anything above.")
 
-    table = st.selectbox("Table", [
-        "analytics.financial_ratios",
-        "analytics.yoy_trends",
-        "analytics.text_sentiment",
-        "staging.financial_metrics",
-        "raw.sec_filings",
-    ])
-
-    order_col = "filing_date DESC" if table == "raw.sec_filings" else "fiscal_year"
+    ALLOWED_TABLES = {
+        "analytics.financial_ratios": "fiscal_year",
+        "analytics.yoy_trends": "fiscal_year",
+        "analytics.text_sentiment": "fiscal_year",
+        "staging.financial_metrics": "fiscal_year",
+        "raw.sec_filings": "filing_date DESC",
+    }
+    table = st.selectbox("Table", list(ALLOWED_TABLES.keys()))
+    if table not in ALLOWED_TABLES:
+        st.error("Invalid table selection.")
+        st.stop()
+    order_col = ALLOWED_TABLES[table]
     explorer_df = query(f"""
         SELECT * FROM {table}
         WHERE ticker IN ({placeholders})
         ORDER BY ticker, {order_col}
-    """)
+    """, available)
     st.dataframe(explorer_df, use_container_width=True, hide_index=True)
 

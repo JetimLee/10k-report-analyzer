@@ -120,6 +120,7 @@ con.close()
 - **Python assets**: Use `materialize(context)` entry point. Access DuckDB via `context.duckdb`. CREATE TABLE IF NOT EXISTS + DELETE for idempotency.
 - **SEC rate limit**: 10 requests/sec max. All ingest scripts and dashboard peer lookups use `time.sleep(0.15)` between requests.
 - **Tickers**: Stored in the `config.selected_tickers` DuckDB table, managed entirely by the dashboard sidebar. Starts empty — no default seeding. Both Generate Report and Clear all tickers write to the table so the selection persists across reloads exactly as the user left it.
+- **Ingest diagnostics**: `sec_filings.py` writes per-ticker status to `config.ingest_status` (`ingested`, `unknown_ticker`, `not_10k_filer`, `no_10k`, `no_filings`, `error`) with a human-readable message. Example: `SVRE` (SaverOne 2014) files 20-F under IFRS, not 10-K — it gets `not_10k_filer` with a clear explanation. The dashboard reads this table to surface per-ticker warnings instead of a generic "no data" message.
 - **Dependency pinning**: All Python deps are pinned to exact versions in `pyproject.toml` (no carets). Bruin CLI and Poetry versions are pinned in the `Dockerfile`. Update pins deliberately — don't let them float.
 
 ## Troubleshooting
