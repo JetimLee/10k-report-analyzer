@@ -46,12 +46,8 @@ def connect_db(retries=15, delay=2):
             else:
                 raise
 
-DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
-
-
 def load_tickers(con):
-    """Load ticker symbols from config.selected_tickers (source of truth).
-    Seeds a small default set on first run if the table is empty."""
+    """Load ticker symbols from config.selected_tickers (source of truth)."""
     con.execute("CREATE SCHEMA IF NOT EXISTS config")
     con.execute("""
         CREATE TABLE IF NOT EXISTS config.selected_tickers (
@@ -66,14 +62,9 @@ def load_tickers(con):
     ]
     if tickers:
         print(f"Loaded {len(tickers)} tickers from config.selected_tickers: {', '.join(tickers)}")
-        return tickers
-
-    con.executemany(
-        "INSERT OR IGNORE INTO config.selected_tickers(ticker) VALUES (?)",
-        [(t,) for t in DEFAULT_TICKERS],
-    )
-    print(f"Seeded config.selected_tickers with defaults: {', '.join(DEFAULT_TICKERS)}")
-    return list(DEFAULT_TICKERS)
+    else:
+        print("config.selected_tickers is empty — no tickers to process")
+    return tickers
 
 HEADERS = {
     "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),

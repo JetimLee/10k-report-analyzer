@@ -186,6 +186,24 @@ def _connect_writable(retries=15, delay=2):
                 raise
 
 
+def read_selected_tickers():
+    """Read the persisted ticker list from DuckDB. Returns [] if table missing/empty."""
+    try:
+        con = duckdb.connect(DB_PATH, read_only=True)
+    except duckdb.IOException:
+        return []
+    try:
+        return [
+            r[0] for r in con.execute(
+                "SELECT ticker FROM config.selected_tickers ORDER BY ticker"
+            ).fetchall()
+        ]
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+
 def write_selected_tickers(tickers):
     """Write the selected ticker list to DuckDB (config.selected_tickers)."""
     con = _connect_writable()
@@ -343,7 +361,9 @@ except Exception as e:
 already_ingested = ingested_tickers()
 
 if "selection" not in st.session_state:
-    st.session_state["selection"] = list(already_ingested)
+    # Persist across reloads via config.selected_tickers (NOT already_ingested),
+    # so clearing the selection and reloading leaves it cleared.
+    st.session_state["selection"] = read_selected_tickers()
 
 # Pending additions from the peer-suggestion UI show up on the next rerun.
 # Reassign the list rather than mutating in place so the multiselect widget
@@ -379,6 +399,7 @@ with st.sidebar.expander("Pick by category", expanded=False):
 
 if st.sidebar.button("Clear all tickers", disabled=not st.session_state.get("selection")):
     st.session_state["selection"] = []
+    write_selected_tickers([])
     st.rerun()
 
 selected = st.sidebar.multiselect(

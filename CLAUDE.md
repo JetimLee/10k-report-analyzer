@@ -119,7 +119,7 @@ con.close()
 - **SQL style**: CTEs over subqueries. NULLIF for safe division. ROUND to 4 decimal places for ratios.
 - **Python assets**: Use `materialize(context)` entry point. Access DuckDB via `context.duckdb`. CREATE TABLE IF NOT EXISTS + DELETE for idempotency.
 - **SEC rate limit**: 10 requests/sec max. All ingest scripts and dashboard peer lookups use `time.sleep(0.15)` between requests.
-- **Tickers**: Stored in the `config.selected_tickers` DuckDB table, managed by the dashboard's Generate Report flow. On first pipeline run, the ingest asset seeds the table with a default set (AAPL, MSFT, GOOGL, AMZN, META) if empty.
+- **Tickers**: Stored in the `config.selected_tickers` DuckDB table, managed entirely by the dashboard sidebar. Starts empty — no default seeding. Both Generate Report and Clear all tickers write to the table so the selection persists across reloads exactly as the user left it.
 - **Dependency pinning**: All Python deps are pinned to exact versions in `pyproject.toml` (no carets). Bruin CLI and Poetry versions are pinned in the `Dockerfile`. Update pins deliberately — don't let them float.
 
 ## Troubleshooting

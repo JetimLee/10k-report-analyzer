@@ -219,7 +219,7 @@ poetry run streamlit run dashboard.py
 
 ## Configuration
 
-- **Tickers** — stored in the `config.selected_tickers` table in DuckDB and managed from the dashboard sidebar (Generate Report overwrites it). On first run, the pipeline seeds the table with a default set (AAPL, MSFT, GOOGL, AMZN, META).
+- **Tickers** — stored in the `config.selected_tickers` table in DuckDB and managed entirely from the dashboard sidebar. The table is the persistence layer for the sidebar selection (Generate Report and Clear all tickers both write to it), so reloading the app reflects exactly what you left it at — no defaults.
 - **SEC User-Agent** — set via the `SEC_USER_AGENT` env var (SEC requires a header identifying your app + contact email). Copy `.env.example` to `.env` and fill it in; `docker compose` picks it up automatically.
 - **Bruin connections** — see `.bruin.yml`.
 
@@ -275,4 +275,4 @@ ten-k-analyzer/
 - **SEC 403 errors** — rate limiting. Wait a minute and retry; all ingest scripts already sleep 0.15s between requests.
 - **Port 8501 in use** — another Streamlit is already running. Stop it, or edit the port mapping in `docker-compose.yml`.
 - **`duckdb.IOException: Conflicting lock is held`** — another process is holding `ten_k.db` (usually a leftover bruin subprocess from a prior pipeline run). `write_selected_tickers` retries for ~30s, but if it keeps failing, find the offender with `ps aux | grep python` and kill it.
-- **Empty ticker list on first run** — the pipeline seeds `config.selected_tickers` with a default set (AAPL, MSFT, GOOGL, AMZN, META) the first time it runs. Manage the list afterwards from the dashboard.
+- **Empty ticker list on first run** — expected. The dashboard starts with an empty selection; pick tickers in the sidebar (category picker or search) and click Generate Report.
