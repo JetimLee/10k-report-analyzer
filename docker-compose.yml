@@ -28,3 +28,18 @@ services:
       SEC_USER_AGENT: ${SEC_USER_AGENT:-10KAnalyzer contact@example.com}
     command: ["bruin", "run", "."]
     profiles: ["run"]
+
+  # One-shot: embed Item 1 (Business) for ~500 S&P 500 tickers into
+  # analytics.sec_universe_embeddings. Takes ~1 hour due to SEC rate limits.
+  # Re-run to top up with new 10-K filings (idempotent).
+  seed-universe:
+    build: .
+    image: ten-k-analyzer:latest
+    container_name: ten-k-seed
+    volumes:
+      - .:/app
+      - /app/.venv
+    environment:
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-10KAnalyzer contact@example.com}
+    command: ["python", "scripts/seed_universe_embeddings.py"]
+    profiles: ["seed"]

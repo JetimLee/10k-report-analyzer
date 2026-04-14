@@ -1,36 +1,81 @@
 # 10-K Analyzer — Data Engineering Capstone
 
-An end-to-end data pipeline built with **Bruin** and **DuckDB** that ingests SEC 10-K filings, extracts financial data via XBRL, computes key accounting ratios, tracks year-over-year trends, and performs text sentiment analysis on risk factors and MD&A sections. A Streamlit dashboard lets you explore the data, search the full SEC ticker universe, suggest industry peers, and trigger pipeline runs from the browser.
+An end-to-end data platform that turns raw SEC 10-K filings into decision-ready financial analysis. Built on **Bruin** (orchestration + data quality), **DuckDB** (analytical store), **Streamlit** (exploration UI), and **sentence-transformers** (peer discovery).
 
-## Pipeline Architecture
+## Business Problems It Solves
+
+Financial analysts, investors, and equity researchers spend enormous amounts of time doing the same manual work over and over: pulling filings from EDGAR, reconciling XBRL tags across companies, recomputing ratios in spreadsheets, and searching Google to figure out who a given company's competitors actually are. This platform automates the drudgery:
+
+| Problem | How the platform solves it |
+|---|---|
+| **"How is this company actually performing?"** — The 10-K contains the answer but is 200+ pages of prose and tables. | Automated XBRL extraction + ratio computation surfaces profitability, liquidity, leverage, and cash-flow quality on a single screen. |
+| **"How has performance changed over time?"** — Point-in-time metrics hide the trajectory. | YoY trend analysis + DuPont ROE decomposition reveals *why* returns are moving: margin, efficiency, or leverage. |
+| **"Is management quietly signaling trouble?"** — Tone often shifts in Risk Factors and MD&A before the numbers do. | Loughran-McDonald finance-specific sentiment scoring on each filing's narrative sections, with risk-theme tagging (cyber, climate, supply chain, etc.). |
+| **"Who should I benchmark this company against?"** — SIC codes are a 1980s taxonomy that group Palantir with 800 unrelated software shops. | MiniLM sentence embeddings on each 10-K's Item 1 (Business) section; cosine similarity surfaces *actual* business-model peers. |
+| **"How do I onboard a new company into analysis?"** — Traditionally this takes hours of manual data entry. | One click in the dashboard adds any SEC-listed ticker to the pipeline and ingests its full filing history. |
+| **"Can non-engineers run this?"** — Most data pipelines require a SQL IDE and a terminal. | Streamlit dashboard lets stakeholders kick off ingestion, seed peer universes, and browse results without touching code. |
+
+## Architecture
 
 ```
-SEC EDGAR API
-      │
-      ▼
-┌─────────────────────── INGEST (Python) ───────────────────────┐
-│  sec_filings          → Filing metadata (CIK, dates, URLs)    │
-│  financial_statements → XBRL fact data (IS, BS, CF line items)│
-│  filing_text_sections → MD&A and Risk Factors raw text        │
-└───────────────────────────────┬────────────────────────────────┘
-                                ▼
-┌─────────────────────── STAGING (SQL) ─────────────────────────┐
-│  financial_metrics    → Deduped, pivoted: 1 row per co/year   │
-│                         with quality checks                    │
-└───────────────────────────────┬────────────────────────────────┘
-                                ▼
-┌─────────────────────── ANALYTICS (SQL + Python) ──────────────┐
-│  financial_ratios     → Profitability, liquidity, leverage     │
-│  yoy_trends           → YoY growth, margin deltas, DuPont ROE │
-│  text_sentiment       → Loughran-McDonald sentiment scoring    │
-└───────────────────────────────────────────────────────────────-┘
-                                │
-                                ▼
-                          DuckDB (ten_k.db)
-                                │
-                                ▼
-                     Streamlit Dashboard (dashboard.py)
+┌───────────────────────────────────────────────────────────────────────────┐
+│                            EXTERNAL SOURCES                               │
+│   SEC EDGAR (filings, XBRL, submissions API)     Wikipedia (S&P 500)      │
+└──────────────────────────────┬────────────────────────────────────────────┘
+                               │ HTTP (rate-limited 10 req/s)
+                               ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                           BRUIN PIPELINE                                  │
+│                                                                           │
+│  ┌────────────────── INGEST (Python) ──────────────────┐                  │
+│  │ raw.sec_filings          Filing metadata            │                  │
+│  │ raw.financial_statements XBRL facts (IS/BS/CF)      │                  │
+│  │ raw.filing_text_sections Item 1 / MD&A / Risk Facts │                  │
+│  └───────────────────────┬──────────────────────────────┘                 │
+│                          ▼                                                │
+│  ┌────────────────── STAGING (SQL) ─────────────────────┐                 │
+│  │ staging.financial_metrics  Dedupe + pivot → wide     │                 │
+│  │                            1 row per company-year    │                 │
+│  └───────────────────────┬──────────────────────────────┘                 │
+│                          ▼                                                │
+│  ┌────────────────── ANALYTICS (SQL + Python) ─────────────────────┐      │
+│  │ analytics.financial_ratios     Profitability, liquidity, lev.   │      │
+│  │ analytics.yoy_trends           YoY growth + DuPont ROE          │      │
+│  │ analytics.text_sentiment       Loughran-McDonald scoring        │      │
+│  │ analytics.business_embeddings  MiniLM vectors of Item 1         │      │
+│  └───────────────────────┬──────────────────────────────────────────┘     │
+│                          ▼                                                │
+│                  Data-quality checks                                      │
+│                  (not_null, unique, accepted_values, custom)              │
+└──────────────────────────┬────────────────────────────────────────────────┘
+                           ▼
+              ┌───────────────────────────┐
+              │   DuckDB (ten_k.db)       │
+              │   columnar, file-backed   │
+              └──────────────┬────────────┘
+                             │
+      ┌──────────────────────┼──────────────────────────┐
+      ▼                      ▼                          ▼
+┌───────────────┐   ┌───────────────────┐    ┌────────────────────────────┐
+│  STREAMLIT    │   │ SEED SCRIPT       │    │  analytics.sec_universe    │
+│  DASHBOARD    │◄──┤ scripts/seed_     │───►│  _embeddings (500+ pre-    │
+│  (dashboard.py)│  │ universe_embed..  │    │  computed S&P 500 peers)   │
+│               │   │ MiniLM embeddings │    └────────────────────────────┘
+│ • Charts      │   └───────────────────┘
+│ • Peer search │
+│ • Kick off    │   All services run in Docker (docker-compose.yml):
+│   pipeline    │     - dashboard (Streamlit, port 8501)
+│ • Kick off    │     - pipeline  (one-shot bruin run .)
+│   seed        │     - seed-universe (one-shot embedding seeder)
+└───────────────┘
 ```
+
+### Design choices
+
+- **DuckDB over Postgres/Snowflake** — this is single-machine analytical workload on < 10M rows. Columnar + embedded = zero infra cost, SQL joins across all schemas, ship the DB file with the repo for demos.
+- **Bruin over Airflow/Dagster** — quality checks (`not_null`, `unique`, `accepted_values`, custom SQL) are first-class in asset definitions, not a separate framework. DAG dependencies are declared inline.
+- **MiniLM for peer discovery** — 90MB, CPU-friendly, sufficient for short business-description similarity. No GPU, no external API.
+- **Sentence embeddings, not just SIC** — industry codes fail for modern, multi-segment businesses. Embedding the actual prose of Item 1 captures business-model similarity the way a human analyst would.
 
 ## Key Metrics Computed
 
@@ -54,6 +99,12 @@ docker compose up --build
 
 # Run the Bruin pipeline as a one-shot container
 docker compose --profile run run --rm pipeline
+
+# Seed peer-suggestion embeddings for ~500 S&P 500 companies (~1 hour, one-time)
+docker compose --profile seed run --rm seed-universe
+
+# Or for a quick smoke test
+docker compose --profile seed run --rm seed-universe python scripts/seed_universe_embeddings.py --limit 20
 ```
 
 The compose file bind-mounts the project directory, so `ten_k.db`, `.sic_cache.json`, and `tickers.csv` all persist on the host between runs.
@@ -81,12 +132,15 @@ poetry run bruin validate .
 poetry run streamlit run dashboard.py
 ```
 
-## Dashboard Features
+## Dashboard Features (for non-technical stakeholders)
 
-- **Full SEC ticker search** — the sidebar multiselect is backed by `company_tickers.json`, so you can pick any SEC-listed company, not just the five in `tickers.csv`.
-- **Generate Report** — clicking the button writes the current selection to `tickers.csv` and runs `bruin run .` in-process, streaming logs into the UI.
-- **Similar companies** — given an anchor ticker, the sidebar fetches its SIC code from the SEC submissions API and suggests peers that share it. A "Discover more peers" button expands the search by name-similarity and caches results to `.sic_cache.json` so subsequent lookups are instant.
-- **Chart captions** — every section has a short explainer so the dashboard reads as a narrative, not just a wall of charts.
+- **Full SEC ticker search** — the sidebar multiselect is backed by `company_tickers.json`, so any SEC-listed company can be added — not just the five shipped in `tickers.csv`.
+- **Generate Report** — writes the current ticker selection to `tickers.csv` and runs the full Bruin pipeline in-process. Shows a progress bar + current-asset label; full log available behind a Developer-mode toggle.
+- **Peer universe seeding** — a sidebar panel lets stakeholders kick off a one-time embedding seed for 20 / 100 / ~500 S&P 500 companies, with live ETA and per-ticker progress. No CLI needed.
+- **Similar companies** — two peer-discovery modes:
+  - *By business description* (primary): MiniLM sentence embeddings of each 10-K Item 1, ranked by cosine similarity. Pulls from both user-ingested tickers and the precomputed universe.
+  - *By SIC code* (fallback): coarse industry filter; useful for discovering small-cap tickers outside the embedding universe.
+- **Story-driven charts** — every section has a short caption explaining what to look for (e.g. "Divergence between revenue and net-income lines usually flags margin pressure or one-time charges").
 - **Cleaned data** — queries filter nulls, drop inf/NaN, and winsorize ratios/growth at the 1–99% tails so a single bad filing can't distort an axis.
 
 ## Configuration

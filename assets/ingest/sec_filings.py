@@ -14,7 +14,17 @@ columns:
     type: string
     checks:
       - name: not_null
-      - name: unique
+custom_checks:
+  - name: ticker_accession_unique
+    description: "A filing (accession_number) may legitimately be shared across multiple tickers for the same CIK (e.g. common stock + warrants), but the (ticker, accession_number) pair must be unique."
+    query: |
+      SELECT COUNT(*) FROM (
+        SELECT ticker, accession_number, COUNT(*) c
+        FROM raw.sec_filings
+        GROUP BY ticker, accession_number
+        HAVING c > 1
+      )
+    value: 0
 @bruin """
 
 import os

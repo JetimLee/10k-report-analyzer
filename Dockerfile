@@ -28,6 +28,10 @@ COPY pyproject.toml poetry.lock ./
 RUN poetry install --no-root --only main \
     && test -x /app/.venv/bin/python
 
+# Pre-download the sentence-transformers model so the first pipeline run
+# doesn't stall on a 90MB HuggingFace download inside the container.
+RUN /app/.venv/bin/python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
+
 COPY . .
 
 EXPOSE 8501

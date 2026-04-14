@@ -165,16 +165,39 @@ def write_tickers_csv(tickers):
             w.writerow([t])
 
 
-def run_bruin_pipeline(log_container):
-    """Stream `bruin run` output line-by-line into the given container."""
-    # In the Docker image poetry isn't on PATH at runtime; fall back to plain `bruin`.
-    import shutil
-    cmd = (
-        ["poetry", "run", "bruin", "run", "."]
-        if shutil.which("poetry")
-        else ["bruin", "run", "."]
-    )
-    proc = subprocess.Popen(
+PIPELINE_ASSETS = [
+    "raw.sec_filings",
+    "raw.financial_statements",
+    "raw.filing_text_sections",
+    "staging.financial_metrics",
+    "analytics.financial_ratios",
+    "analytics.yoy_trends",
+    "analytics.text_sentiment",
+    "analytics.business_embeddings",
+]
+
+# Strip ANSI color codes Bruin emits
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def parse_asset_event(line):
+    """Return (asset_name, event) where event is 'start', 'done', 'fail', or None."""
+    clean = _ANSI_RE.sub("", line)
+    for asset in PIPELINE_ASSETS:
+        if asset in clean:
+            lower = clean.lower()
+            if any(k in lower for k in ("failed", "error")):
+                return asset, "fail"
+            if any(k in lower for k in ("completed", "finished", "success", "✓", "done")):
+                return asset, "done"
+            if any(k in lower for k in ("running", "starting", "executing", "▶")):
+                return asset, "start"
+            return asset, "seen"
+    return None, None
+
+
+def _spawn(cmd):
+    return subprocess.Popen(
         cmd,
         cwd=os.path.dirname(os.path.abspath(__file__)) or ".",
         stdout=subprocess.PIPE,
@@ -182,12 +205,82 @@ def run_bruin_pipeline(log_container):
         text=True,
         bufsize=1,
     )
+
+
+def run_seed_script(limit, progress_bar, status_text, log_container):
+    """Run scripts/seed_universe_embeddings.py, streaming [i/N] progress."""
+    cmd = ["python", "scripts/seed_universe_embeddings.py"]
+    if limit:
+        cmd += ["--limit", str(limit)]
+    proc = _spawn(cmd)
     lines = []
+    progress_re = re.compile(r"\[(\d+)/(\d+)\]\s*(\S+)")
+    started = time.time()
+    last_i = 0
+    last_total = limit or 500
+
     for line in proc.stdout:
         lines.append(line.rstrip())
-        log_container.code("\n".join(lines[-200:]))
+        if log_container is not None:
+            log_container.code("\n".join(lines[-400:]))
+        m = progress_re.search(_ANSI_RE.sub("", line))
+        if m:
+            i, total, ticker = int(m.group(1)), int(m.group(2)), m.group(3)
+            last_i, last_total = i, total
+            progress_bar.progress(min(i / total, 1.0))
+            elapsed = time.time() - started
+            rate = i / elapsed if elapsed > 0 else 0
+            eta_s = (total - i) / rate if rate else 0
+            eta = f"{int(eta_s // 60)}m {int(eta_s % 60)}s remaining" if rate else ""
+            status_text.markdown(f"Embedding **{ticker}** — {i}/{total} · {eta}")
+
     proc.wait()
-    return proc.returncode, "\n".join(lines)
+    if proc.returncode == 0:
+        progress_bar.progress(1.0)
+    return proc.returncode, "\n".join(lines), last_i, last_total
+
+
+def run_bruin_pipeline(progress_bar, status_text, log_container):
+    """Stream `bruin run` output, updating progress UI and (optionally) a log.
+    Returns (returncode, full_output, completed_assets, failed_assets)."""
+    import shutil
+    cmd = (
+        ["poetry", "run", "bruin", "run", "."]
+        if shutil.which("poetry")
+        else ["bruin", "run", "."]
+    )
+    proc = _spawn(cmd)
+    lines = []
+    completed = set()
+    failed = set()
+    current = None
+    total = len(PIPELINE_ASSETS)
+
+    for line in proc.stdout:
+        lines.append(line.rstrip())
+        if log_container is not None:
+            log_container.code("\n".join(lines[-400:]))
+
+        asset, event = parse_asset_event(line)
+        if asset:
+            if event == "done":
+                completed.add(asset)
+                if current == asset:
+                    current = None
+            elif event == "fail":
+                failed.add(asset)
+                if current == asset:
+                    current = None
+            elif event == "start":
+                current = asset
+
+        done_count = len(completed)
+        progress_bar.progress(min(done_count / total, 1.0))
+        label = f"Running: **{current}**" if current else f"{done_count} of {total} assets complete"
+        status_text.markdown(f"{label}")
+
+    proc.wait()
+    return proc.returncode, "\n".join(lines), completed, failed
 
 
 # --- Sidebar: ticker picker ---
@@ -208,12 +301,18 @@ except Exception as e:
 already_ingested = ingested_tickers()
 
 if "selection" not in st.session_state:
-    st.session_state.selection = list(already_ingested)
+    st.session_state["selection"] = list(already_ingested)
 
-# Pending additions from the peer-suggestion UI show up on the next rerun
-for t in st.session_state.pop("_add_to_selection", []):
-    if t not in st.session_state.selection:
-        st.session_state.selection.append(t)
+# Pending additions from the peer-suggestion UI show up on the next rerun.
+# Reassign the list rather than mutating in place so the multiselect widget
+# actually picks up the new values.
+pending = st.session_state.pop("_add_to_selection", [])
+if pending:
+    current = list(st.session_state["selection"])
+    for t in pending:
+        if t not in current:
+            current.append(t)
+    st.session_state["selection"] = current
 
 selected = st.sidebar.multiselect(
     "Select tickers (search any SEC-listed company)",
@@ -229,7 +328,44 @@ if missing:
     )
 
 # --- Similar-company suggestions ---
+@st.cache_data(ttl=300)
+def load_embeddings():
+    """Union the user-ingested embeddings with the precomputed universe.
+    When a ticker is in both, prefer the ingested row (has more 10-K data)."""
+    frames = []
+    try:
+        a = query("SELECT ticker, embedding, 'ingested' AS source FROM analytics.business_embeddings")
+        frames.append(a)
+    except Exception:
+        pass
+    try:
+        b = query("SELECT ticker, embedding, 'universe' AS source FROM analytics.sec_universe_embeddings")
+        frames.append(b)
+    except Exception:
+        pass
+    if not frames:
+        return pd.DataFrame(columns=["ticker", "embedding", "source"])
+    out = pd.concat(frames, ignore_index=True)
+    out["_rank"] = out["source"].map({"ingested": 0, "universe": 1})
+    out = out.sort_values("_rank").drop_duplicates("ticker", keep="first")
+    return out.drop(columns=["_rank"]).reset_index(drop=True)
+
+
+def embedding_peers(anchor, df, top_k=10):
+    """Rank ingested tickers by cosine similarity to the anchor's 10-K Business section.
+    Embeddings are already L2-normalized at ingest time, so cosine = dot product."""
+    if df.empty or anchor not in df["ticker"].values:
+        return pd.DataFrame()
+    mat = np.vstack(df["embedding"].to_numpy())
+    anchor_idx = df.index[df["ticker"] == anchor][0]
+    sims = mat @ mat[anchor_idx]
+    out = pd.DataFrame({"ticker": df["ticker"], "similarity": sims})
+    out = out[out["ticker"] != anchor].sort_values("similarity", ascending=False)
+    return out.head(top_k).reset_index(drop=True)
+
+
 sic_cache = load_sic_cache()
+emb_df = load_embeddings()
 
 if selected and not sec_df.empty:
     st.sidebar.divider()
@@ -240,79 +376,163 @@ if selected and not sec_df.empty:
         format_func=lambda t: f"{t} — {label_map.get(t, t)}",
     )
 
-    # Make sure we know the anchor's SIC, and populate cache for ingested tickers once.
-    need_lookup = [t for t in list(dict.fromkeys([anchor, *already_ingested])) if t not in sic_cache]
-    if need_lookup:
-        with st.sidebar.status(f"Fetching SIC for {len(need_lookup)} tickers…", expanded=False):
-            get_sic_bulk(need_lookup, cik_lookup, sic_cache)
+    tab_emb, tab_sic = st.sidebar.tabs(["By business description", "By SIC code"])
 
-    anchor_sic = sic_cache.get(anchor, {}).get("sic", "")
-    anchor_desc = sic_cache.get(anchor, {}).get("sic_description", "")
-
-    if anchor_sic:
-        st.sidebar.caption(f"SIC **{anchor_sic}** — {anchor_desc}")
-        peers = sorted(
-            t for t, v in sic_cache.items()
-            if v.get("sic") == anchor_sic and t != anchor and t in label_map
+    # --- Embedding-based peers (ingested only) ---
+    with tab_emb:
+        st.caption(
+            f"Cosine similarity on MiniLM embeddings of each 10-K Item 1 (Business) section. "
+            f"Universe currently holds **{len(emb_df)}** companies."
         )
-        if peers:
+        if anchor not in set(emb_df["ticker"]):
+            st.info(
+                "No embedding yet for this ticker. Click **Generate Report** to ingest it, "
+                "or seed the universe via `python scripts/seed_universe_embeddings.py`."
+            )
+        else:
+            ranked = embedding_peers(anchor, emb_df, top_k=15)
+            if ranked.empty:
+                st.info("No other ingested tickers to compare against yet.")
+            else:
+                ranked["label"] = ranked["ticker"].apply(
+                    lambda t: f"{t} — {label_map.get(t, t)} ({ranked.loc[ranked['ticker'] == t, 'similarity'].iloc[0]:.2f})"
+                )
+                options = ranked["ticker"].tolist()
+                to_add_emb = st.multiselect(
+                    "Ranked peers (higher score = more similar)",
+                    options=options,
+                    format_func=lambda t: ranked.loc[ranked["ticker"] == t, "label"].iloc[0],
+                    key="peer_add_emb",
+                )
+                if st.button("Add to selection", disabled=not to_add_emb, key="add_emb"):
+                    st.session_state["_add_to_selection"] = to_add_emb
+                    st.rerun()
+
+    # --- SIC-based peer discovery (for finding brand-new tickers outside the ingested set) ---
+    with tab_sic:
+        st.caption("Coarse industry filter. Use this to surface candidates you haven't ingested yet.")
+        need_lookup = [t for t in list(dict.fromkeys([anchor, *already_ingested])) if t not in sic_cache]
+        if need_lookup:
+            with st.status(f"Fetching SIC for {len(need_lookup)} tickers…", expanded=False):
+                get_sic_bulk(need_lookup, cik_lookup, sic_cache)
+
+        anchor_sic = sic_cache.get(anchor, {}).get("sic", "")
+        anchor_desc = sic_cache.get(anchor, {}).get("sic_description", "")
+
+        if anchor_sic:
+            st.caption(f"SIC **{anchor_sic}** — {anchor_desc}")
+            peers = sorted(
+                t for t, v in sic_cache.items()
+                if v.get("sic") == anchor_sic and t != anchor and t in label_map
+            )
             not_yet = [t for t in peers if t not in selected]
             if not_yet:
-                to_add = st.sidebar.multiselect(
+                to_add_sic = st.multiselect(
                     "Peers (same SIC)",
                     options=not_yet,
                     format_func=lambda t: f"{t} — {label_map.get(t, t)}",
-                    key="peer_add",
+                    key="peer_add_sic",
                 )
-                if st.sidebar.button("Add peers to selection", disabled=not to_add):
-                    st.session_state["_add_to_selection"] = to_add
+                if st.button("Add to selection", disabled=not to_add_sic, key="add_sic"):
+                    st.session_state["_add_to_selection"] = to_add_sic
                     st.rerun()
             else:
-                st.sidebar.caption("All known peers are already selected.")
+                st.caption("No new SIC peers cached — run Discover below.")
+
+            scan_size = st.slider("Scan batch size", 10, 100, 40, step=10, key="scan_size")
+            if st.button("Discover more peers", key="discover_sic"):
+                ranked_c = rank_name_similar(anchor, label_map.get(anchor, ""), sec_df, limit=scan_size)
+                uncached = [t for t in ranked_c if t not in sic_cache]
+                if len(uncached) < scan_size:
+                    extras = [t for t in sec_df["ticker"] if t not in sic_cache and t not in uncached]
+                    uncached.extend(extras[: scan_size - len(uncached)])
+                if uncached:
+                    with st.status(
+                        f"Scanning {len(uncached)} candidates for SIC {anchor_sic}…", expanded=True
+                    ) as s:
+                        hits = []
+
+                        def _cb(ticker, info):
+                            if info.get("sic") == anchor_sic:
+                                hits.append(ticker)
+                                s.update(label=f"Found {len(hits)} peer(s), scanning…")
+
+                        get_sic_bulk(uncached, cik_lookup, sic_cache, status_cb=_cb)
+                        s.update(label=f"Done — {len(hits)} new peer(s) found", state="complete")
+                    st.rerun()
+                else:
+                    st.info("Entire SEC universe already cached — no candidates left.")
         else:
-            st.sidebar.caption("No peers cached yet — run Discover below.")
-
-        scan_size = st.sidebar.slider("Scan batch size", 10, 100, 40, step=10)
-        if st.sidebar.button("Discover more peers"):
-            # Start with name-similar candidates, then top up with any uncached tickers.
-            ranked = rank_name_similar(anchor, label_map.get(anchor, ""), sec_df, limit=scan_size)
-            uncached = [t for t in ranked if t not in sic_cache]
-            if len(uncached) < scan_size:
-                extras = [t for t in sec_df["ticker"] if t not in sic_cache and t not in uncached]
-                uncached.extend(extras[: scan_size - len(uncached)])
-            if uncached:
-                with st.sidebar.status(
-                    f"Scanning {len(uncached)} candidates for SIC {anchor_sic}…", expanded=True
-                ) as s:
-                    hits = []
-
-                    def _cb(ticker, info):
-                        if info.get("sic") == anchor_sic:
-                            hits.append(ticker)
-                            s.update(label=f"Found {len(hits)} peer(s), scanning…")
-
-                    get_sic_bulk(uncached, cik_lookup, sic_cache, status_cb=_cb)
-                    s.update(label=f"Done — {len(hits)} new peer(s) found", state="complete")
-                st.rerun()
-            else:
-                st.sidebar.info("Entire SEC universe already cached — no candidates left.")
-    else:
-        st.sidebar.caption("Couldn't determine SIC for this ticker.")
+            st.caption("Couldn't determine SIC for this ticker.")
 
 st.sidebar.divider()
 
+dev_mode = st.sidebar.toggle("Developer mode", value=False, help="Show the full pipeline log")
+
+# --- Seed peer-suggestion universe ---
+st.sidebar.divider()
+with st.sidebar.expander("Peer universe", expanded=False):
+    st.caption(
+        f"Precomputed 10-K Item 1 embeddings used for peer ranking. "
+        f"Currently: **{len(emb_df)}** companies."
+    )
+    seed_scope = st.radio(
+        "Seed scope",
+        options=["Quick (20)", "Broad (100)", "Full S&P 500 (~500)"],
+        index=0,
+        help="Each ticker takes ~5–10s due to SEC rate limits. Start small to verify.",
+    )
+    scope_limit = {"Quick (20)": 20, "Broad (100)": 100, "Full S&P 500 (~500)": None}[seed_scope]
+
+    if st.button("Start seeding", key="seed_btn"):
+        with st.status(f"Seeding peer universe ({seed_scope})…", expanded=True) as seed_status:
+            seed_progress = st.progress(0.0)
+            seed_text = st.empty()
+            seed_log = None
+            if dev_mode:
+                with st.expander("Seed log", expanded=False):
+                    seed_log = st.empty()
+            rc, output, done, total = run_seed_script(scope_limit, seed_progress, seed_text, seed_log)
+            if rc == 0:
+                summary_line = next(
+                    (line for line in output.splitlines() if line.strip().startswith("embedded:")),
+                    f"{done}/{total} processed",
+                )
+                seed_text.success(f"✓ Seed complete — {summary_line}")
+                seed_status.update(label="Seed complete", state="complete")
+                st.cache_data.clear()
+                time.sleep(1)
+                st.rerun()
+            else:
+                seed_status.update(label="Seed failed", state="error")
+                seed_text.error(f"✗ Seed failed (exit {rc}). Turn on Developer mode for the full log.")
+
 if st.sidebar.button("Generate Report", type="primary", disabled=not selected):
     write_tickers_csv(selected)
-    with st.status("Running pipeline… (fetching filings, parsing XBRL, scoring text)", expanded=True) as status:
-        log_box = st.empty()
-        rc, output = run_bruin_pipeline(log_box)
+    with st.status("Running pipeline…", expanded=True) as status:
+        progress_bar = st.progress(0.0)
+        status_text = st.empty()
+        log_box = None
+        if dev_mode:
+            with st.expander("Pipeline log", expanded=False):
+                log_box = st.empty()
+        rc, output, completed, failed = run_bruin_pipeline(progress_bar, status_text, log_box)
+
         if rc == 0:
+            progress_bar.progress(1.0)
+            status_text.success(f"✓ Pipeline complete — {len(completed)} of {len(PIPELINE_ASSETS)} assets built")
             status.update(label="Pipeline complete", state="complete")
             st.cache_data.clear()
             time.sleep(1)
             st.rerun()
         else:
-            status.update(label=f"Pipeline failed (exit {rc})", state="error")
+            status.update(label="Pipeline failed", state="error")
+            if failed:
+                status_text.error(
+                    "✗ Pipeline failed. Failed assets:\n" + "\n".join(f"- `{a}`" for a in sorted(failed))
+                )
+            else:
+                status_text.error(f"✗ Pipeline failed (exit {rc}). Turn on Developer mode to see the log.")
 
 if not selected:
     st.info("Select at least one ticker in the sidebar, then click **Generate Report**.")

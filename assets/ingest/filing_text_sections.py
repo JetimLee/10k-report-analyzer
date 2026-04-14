@@ -18,6 +18,7 @@ columns:
         value:
           - "MDA"
           - "RISK_FACTORS"
+          - "BUSINESS"
 @bruin """
 
 import os
@@ -47,6 +48,9 @@ HEADERS = {
 
 # Section headers for 10-K extraction
 SECTION_PATTERNS = {
+    "BUSINESS": [
+        r"Item\s+1[\.\s\-\u2013\u2014]+Business",
+    ],
     "MDA": [
         r"Item\s+7[^A][\.\s\-\u2013\u2014]*Management.{0,30}Discussion",
     ],
@@ -57,8 +61,21 @@ SECTION_PATTERNS = {
 
 # Patterns indicating the start of the next section (to know where to stop)
 NEXT_SECTION = [
-    r"Item\s+(?:1B|1C|2|7A|8)[\.\s\-\u2013\u2014]",
+    r"Item\s+(?:1A|1B|1C|2|7A|8)[\.\s\-\u2013\u2014]",
 ]
+
+# Words that, when they precede an "Item X" token, indicate a cross-reference
+# (e.g. "See Item 1A of Part I Risk Factors") rather than a section boundary.
+CROSS_REF_PREFIXES = re.compile(
+    r"(?:see|per|under|in|to|of|from|pursuant to|refer to|included in|contained in)\s*$",
+    re.IGNORECASE,
+)
+
+
+def is_cross_reference(text, match_start, window=30):
+    """True if the match is preceded by a cross-reference word like 'See'."""
+    before = text[max(0, match_start - window):match_start]
+    return bool(CROSS_REF_PREFIXES.search(before))
 
 
 def clean_html(text):
@@ -93,12 +110,15 @@ def extract_section(full_text, section_type):
     for start_match in all_matches:
         remaining = cleaned[start_match.end():]
 
+        # Find the first NEXT_SECTION match that is NOT a cross-reference.
         end_match = None
         for pattern in NEXT_SECTION:
-            match = re.search(pattern, remaining, re.IGNORECASE)
-            if match:
-                if end_match is None or match.start() < end_match.start():
-                    end_match = match
+            for candidate in re.finditer(pattern, remaining, re.IGNORECASE):
+                if is_cross_reference(remaining, candidate.start()):
+                    continue
+                if end_match is None or candidate.start() < end_match.start():
+                    end_match = candidate
+                break  # first real boundary wins for this pattern
 
         if end_match:
             section_text = remaining[:end_match.start()].strip()
@@ -150,7 +170,7 @@ def materialize(context):
             resp.raise_for_status()
             full_text = resp.text
 
-            for section_type in ["MDA", "RISK_FACTORS"]:
+            for section_type in ["BUSINESS", "MDA", "RISK_FACTORS"]:
                 section_text = extract_section(full_text, section_type)
                 if section_text and len(section_text) > 100:
                     rows.append((
