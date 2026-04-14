@@ -6,8 +6,8 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      # Bind the project dir so ten_k.db, .sic_cache.json, tickers.csv, and
-      # pipeline outputs all persist on the host with no extra path plumbing.
+      # Bind the project dir so ten_k.db, .sic_cache.json, and pipeline
+      # outputs all persist on the host with no extra path plumbing.
       - .:/app
       # Shadow the host's .venv with an empty anonymous volume so Bruin/Poetry
       # don't try to reuse a broken macOS virtualenv inside the Linux container.

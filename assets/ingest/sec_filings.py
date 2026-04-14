@@ -46,20 +46,34 @@ def connect_db(retries=15, delay=2):
             else:
                 raise
 
-TICKERS_CSV = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "tickers.csv"))
+DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "META"]
 
 
-def load_tickers():
-    """Load ticker symbols from tickers.csv at the project root."""
-    if not os.path.exists(TICKERS_CSV):
-        print(f"Warning: {TICKERS_CSV} not found, no tickers to process")
-        return []
-    with open(TICKERS_CSV) as f:
-        import csv
-        reader = csv.DictReader(f)
-        tickers = [row["ticker"].strip().upper() for row in reader if row["ticker"].strip()]
-    print(f"Loaded {len(tickers)} tickers from tickers.csv: {', '.join(tickers)}")
-    return tickers
+def load_tickers(con):
+    """Load ticker symbols from config.selected_tickers (source of truth).
+    Seeds a small default set on first run if the table is empty."""
+    con.execute("CREATE SCHEMA IF NOT EXISTS config")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS config.selected_tickers (
+            ticker VARCHAR PRIMARY KEY,
+            added_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    tickers = [
+        r[0] for r in con.execute(
+            "SELECT ticker FROM config.selected_tickers ORDER BY ticker"
+        ).fetchall()
+    ]
+    if tickers:
+        print(f"Loaded {len(tickers)} tickers from config.selected_tickers: {', '.join(tickers)}")
+        return tickers
+
+    con.executemany(
+        "INSERT OR IGNORE INTO config.selected_tickers(ticker) VALUES (?)",
+        [(t,) for t in DEFAULT_TICKERS],
+    )
+    print(f"Seeded config.selected_tickers with defaults: {', '.join(DEFAULT_TICKERS)}")
+    return list(DEFAULT_TICKERS)
 
 HEADERS = {
     "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
@@ -138,7 +152,7 @@ def materialize(context):
     """)
     con.execute("DELETE FROM raw.sec_filings")
 
-    tickers = load_tickers()
+    tickers = load_tickers(con)
     if not tickers:
         print("No tickers to process, exiting")
         con.close()

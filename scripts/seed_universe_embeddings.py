@@ -1,9 +1,11 @@
 """Seed analytics.sec_universe_embeddings with Item 1 (Business) embeddings for a
 broad universe of SEC-listed companies. Run manually (not part of `bruin run .`):
 
-    python scripts/seed_universe_embeddings.py                    # S&P 500 (default)
-    python scripts/seed_universe_embeddings.py --tickers FILE     # custom ticker list
-    python scripts/seed_universe_embeddings.py --limit 50         # smoke test
+    python scripts/seed_universe_embeddings.py                       # S&P 500 (default)
+    python scripts/seed_universe_embeddings.py --index nasdaq100     # NASDAQ-100
+    python scripts/seed_universe_embeddings.py --index sp500+nasdaq100  # union
+    python scripts/seed_universe_embeddings.py --tickers FILE        # custom ticker list
+    python scripts/seed_universe_embeddings.py --limit 50            # smoke test
 
 The script is resumable: tickers already present in the table are skipped unless
 their latest 10-K has a newer fiscal year.
@@ -23,6 +25,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DB_PATH = os.path.join(PROJECT_ROOT, "ten_k.db")
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 WIKI_SP500_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+WIKI_NASDAQ100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 MAX_CHARS = 20000
 HEADERS = {
@@ -50,6 +53,31 @@ def fetch_sp500():
     tickers = sorted({t.replace(".", "-") for t in rows})
     print(f"  Found {len(tickers)} tickers")
     return tickers
+
+
+def fetch_nasdaq100():
+    """Scrape the NASDAQ-100 constituents list from Wikipedia."""
+    print("Fetching NASDAQ-100 list from Wikipedia…")
+    resp = requests.get(
+        WIKI_NASDAQ100_URL, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=30
+    )
+    resp.raise_for_status()
+    # The constituents table uses <td><a ...>TICKER</a> for the symbol column.
+    rows = re.findall(r'<td><a [^>]*>([A-Z][A-Z0-9\.\-]{0,5})</a>', resp.text)
+    tickers = sorted({t.replace(".", "-") for t in rows})
+    print(f"  Found {len(tickers)} tickers")
+    return tickers
+
+
+def fetch_index(name):
+    name = name.lower()
+    if name == "sp500":
+        return fetch_sp500()
+    if name == "nasdaq100":
+        return fetch_nasdaq100()
+    if name in ("sp500+nasdaq100", "nasdaq100+sp500", "combined", "union"):
+        return sorted(set(fetch_sp500()) | set(fetch_nasdaq100()))
+    raise ValueError(f"Unknown index: {name}")
 
 
 def load_tickers_file(path):
@@ -145,6 +173,12 @@ def ensure_table(con):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tickers", help="Path to a CSV or newline-delimited ticker list")
+    ap.add_argument(
+        "--index",
+        default="sp500",
+        choices=["sp500", "nasdaq100", "sp500+nasdaq100"],
+        help="Which index to seed (ignored if --tickers is given)",
+    )
     ap.add_argument("--limit", type=int, help="Only process first N tickers (smoke test)")
     ap.add_argument("--force", action="store_true", help="Re-embed even if already cached")
     args = ap.parse_args()
@@ -152,7 +186,7 @@ def main():
     if args.tickers:
         tickers = load_tickers_file(args.tickers)
     else:
-        tickers = fetch_sp500()
+        tickers = fetch_index(args.index)
     if args.limit:
         tickers = tickers[: args.limit]
 

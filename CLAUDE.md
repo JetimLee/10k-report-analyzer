@@ -11,7 +11,6 @@ docker-compose.yml                      # dashboard service + one-shot pipeline 
 pipeline.yml                            # Pipeline definition (schedule, connections)
 pyproject.toml / poetry.lock            # Pinned Python deps
 dashboard.py                            # Streamlit UI
-tickers.csv                             # Companies to ingest
 .sic_cache.json                         # Disk cache of ticker→SIC lookups (gitignored)
 assets/
   ingest/
@@ -24,6 +23,10 @@ assets/
     financial_ratios.sql                # analytics.financial_ratios — profitability, liquidity, leverage
     yoy_trends.sql                      # analytics.yoy_trends — growth rates, margin deltas, DuPont
     text_sentiment.py                   # analytics.text_sentiment — Loughran-McDonald scoring
+    business_embeddings.py              # analytics.business_embeddings — MiniLM vectors of Item 1 for ingested tickers
+scripts/
+  seed_universe_embeddings.py           # One-shot seeder for analytics.sec_universe_embeddings
+                                        # (S&P 500 / NASDAQ-100 / combined via --index)
 ```
 
 ## DAG / Dependency Order
@@ -91,9 +94,13 @@ con.close()
 ```
 
 ## Dashboard (`dashboard.py`)
-- Sidebar multiselect is backed by SEC `company_tickers.json` — any SEC-listed company is selectable, not just those in `tickers.csv`. Already-ingested tickers are pre-selected.
-- **Generate Report** button writes the current selection to `tickers.csv` and runs `bruin run .` via `subprocess.Popen`, streaming stdout into an `st.status` loader. Clears the Streamlit cache and reruns on success. Falls back to plain `bruin` when Poetry isn't on PATH (inside the Docker image).
-- **Similar companies** sidebar section uses the SEC submissions API to fetch each ticker's SIC code and suggests peers that share it. Results are persisted to `.sic_cache.json` so a given CIK is only fetched once per machine. A "Discover more peers" button seeds the cache by ranking the full SEC universe via company-name token overlap (stopwords stripped) and fetching SIC for the top ~40.
+- Sidebar multiselect is backed by SEC `company_tickers.json` — any SEC-listed company is selectable. Already-ingested tickers are pre-selected.
+- **Pick by category** expander offers curated industry buckets (Big Tech, Banking, Defense & Aerospace, Pharma, Energy, Retail, Automotive, Semiconductors, Cloud & SaaS, Streaming, Airlines, Telecom, Consumer Staples, Insurance, Payments & Fintech) — selecting a category appends its tickers to the selection. Defined in `CATEGORIES` at the top of `dashboard.py`.
+- **Generate Report** button sits directly under the Companies multiselect (always visible, disabled until at least one ticker is picked). Writes the current selection to `config.selected_tickers` in DuckDB and runs `bruin run .` via `subprocess.Popen`, streaming stdout into an `st.status` loader. Clears the Streamlit cache and reruns on success. Falls back to plain `bruin` when Poetry isn't on PATH (inside the Docker image).
+- **Similar companies** has two tabs:
+  - *By business description*: cosine similarity over MiniLM embeddings of each 10-K's Item 1. The top-N slider (10–100, default 25) is important — cosine similarity is symmetric but top-N cutoffs aren't, so widening the list surfaces peers that sit just outside a dense cluster.
+  - *By SIC code*: uses SEC submissions API, persists to `.sic_cache.json`. "Discover more peers" ranks the full SEC universe via company-name token overlap (stopwords stripped) and fetches SIC for the top ~40.
+- **Peer universe** expander kicks off `scripts/seed_universe_embeddings.py` from the UI: pick an index (S&P 500 / NASDAQ-100 / combined ~570) and a scope (20 / 100 / full). Progress is streamed from `[i/N]` lines in the script's stdout. The combined index is what catches tech names like SNOW/MDB that aren't in the S&P 500.
 - Charts use `st.caption()` explainers so the dashboard tells a story rather than being a wall of numbers.
 - `clean_df()` strips inf/NaN; `clip_outliers()` winsorizes ratios/growth at 1–99% so a single anomalous filing can't squash an axis.
 
@@ -102,7 +109,7 @@ con.close()
 - **SQL style**: CTEs over subqueries. NULLIF for safe division. ROUND to 4 decimal places for ratios.
 - **Python assets**: Use `materialize(context)` entry point. Access DuckDB via `context.duckdb`. CREATE TABLE IF NOT EXISTS + DELETE for idempotency.
 - **SEC rate limit**: 10 requests/sec max. All ingest scripts and dashboard peer lookups use `time.sleep(0.15)` between requests.
-- **Tickers**: Configured in `tickers.csv` at the project root (one ticker per line with a `ticker` header). Default: AAPL, MSFT, GOOGL, AMZN, META.
+- **Tickers**: Stored in the `config.selected_tickers` DuckDB table, managed by the dashboard's Generate Report flow. On first pipeline run, the ingest asset seeds the table with a default set (AAPL, MSFT, GOOGL, AMZN, META) if empty.
 - **Dependency pinning**: All Python deps are pinned to exact versions in `pyproject.toml` (no carets). Bruin CLI and Poetry versions are pinned in the `Dockerfile`. Update pins deliberately — don't let them float.
 
 ## Troubleshooting

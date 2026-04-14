@@ -1,4 +1,3 @@
-import csv
 import json
 import os
 import re
@@ -14,13 +13,31 @@ import requests
 import streamlit as st
 
 DB_PATH = "ten_k.db"
-TICKERS_CSV = "tickers.csv"
 SIC_CACHE_PATH = ".sic_cache.json"
 SEC_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_HEADERS = {
     "User-Agent": os.environ.get("SEC_USER_AGENT", "10KAnalyzer contact@example.com"),
     "Accept-Encoding": "gzip, deflate",
 }
+CATEGORIES = {
+    "Big Tech": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "ORCL"],
+    "AI Leaders": ["NVDA", "MSFT", "GOOGL", "META", "AMZN", "AAPL", "PLTR", "AMD", "AVGO", "ORCL", "CRM", "SNOW", "IBM", "ARM", "TSM"],
+    "Banking": ["JPM", "BAC", "WFC", "C", "GS", "MS", "USB", "PNC"],
+    "Defense & Aerospace": ["LMT", "RTX", "NOC", "GD", "BA", "LHX", "HII"],
+    "Pharma & Biotech": ["JNJ", "PFE", "MRK", "LLY", "ABBV", "BMY", "AMGN", "GILD"],
+    "Energy (Oil & Gas)": ["XOM", "CVX", "COP", "SLB", "EOG", "PSX", "MPC", "OXY"],
+    "Retail": ["WMT", "COST", "TGT", "HD", "LOW", "KR", "DG"],
+    "Automotive": ["TSLA", "GM", "F", "STLA", "RIVN", "LCID"],
+    "Semiconductors": ["NVDA", "AMD", "INTC", "AVGO", "QCOM", "TXN", "MU", "AMAT", "LRCX"],
+    "Cloud & SaaS": ["CRM", "NOW", "SNOW", "MDB", "DDOG", "NET", "PLTR", "WDAY"],
+    "Streaming & Media": ["NFLX", "DIS", "CMCSA", "WBD", "PARA", "SPOT"],
+    "Airlines": ["DAL", "UAL", "AAL", "LUV", "ALK"],
+    "Telecom": ["VZ", "T", "TMUS", "CHTR"],
+    "Consumer Staples": ["PG", "KO", "PEP", "MDLZ", "CL", "KMB", "GIS"],
+    "Insurance": ["BRK-B", "PGR", "TRV", "ALL", "AIG", "MET", "PRU"],
+    "Payments & Fintech": ["V", "MA", "PYPL", "SQ", "FIS", "FISV", "AXP", "COF"],
+}
+
 STOPWORDS = {
     "inc", "corp", "corporation", "company", "co", "ltd", "llc", "holdings",
     "group", "plc", "the", "and", "of", "international", "industries", "systems",
@@ -157,12 +174,25 @@ def ingested_tickers():
         return []
 
 
-def write_tickers_csv(tickers):
-    with open(TICKERS_CSV, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["ticker"])
-        for t in tickers:
-            w.writerow([t])
+def write_selected_tickers(tickers):
+    """Write the selected ticker list to DuckDB (config.selected_tickers)."""
+    con = duckdb.connect(DB_PATH)
+    try:
+        con.execute("CREATE SCHEMA IF NOT EXISTS config")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS config.selected_tickers (
+                ticker VARCHAR PRIMARY KEY,
+                added_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        con.execute("DELETE FROM config.selected_tickers")
+        if tickers:
+            con.executemany(
+                "INSERT INTO config.selected_tickers(ticker) VALUES (?)",
+                [(t,) for t in tickers],
+            )
+    finally:
+        con.close()
 
 
 PIPELINE_ASSETS = [
@@ -207,9 +237,9 @@ def _spawn(cmd):
     )
 
 
-def run_seed_script(limit, progress_bar, status_text, log_container):
+def run_seed_script(index, limit, progress_bar, status_text, log_container):
     """Run scripts/seed_universe_embeddings.py, streaming [i/N] progress."""
-    cmd = ["python", "scripts/seed_universe_embeddings.py"]
+    cmd = ["python", "scripts/seed_universe_embeddings.py", "--index", index]
     if limit:
         cmd += ["--limit", str(limit)]
     proc = _spawn(cmd)
@@ -314,6 +344,31 @@ if pending:
             current.append(t)
     st.session_state["selection"] = current
 
+with st.sidebar.expander("Pick by category", expanded=False):
+    st.caption("Curated sets of well-known tickers for each industry.")
+    chosen_cats = st.multiselect(
+        "Categories",
+        options=list(CATEGORIES.keys()),
+        key="category_picker",
+    )
+    col_r, col_a = st.columns(2)
+    with col_r:
+        if st.button("Replace selection", disabled=not chosen_cats, key="replace_cats"):
+            st.session_state["selection"] = sorted(
+                {t for c in chosen_cats for t in CATEGORIES[c]}
+            )
+            st.rerun()
+    with col_a:
+        if st.button("Add to selection", disabled=not chosen_cats, key="add_cats"):
+            st.session_state["_add_to_selection"] = sorted(
+                {t for c in chosen_cats for t in CATEGORIES[c]}
+            )
+            st.rerun()
+
+if st.sidebar.button("Clear all tickers", disabled=not st.session_state.get("selection")):
+    st.session_state["selection"] = []
+    st.rerun()
+
 selected = st.sidebar.multiselect(
     "Select tickers (search any SEC-listed company)",
     options=sec_options or already_ingested,
@@ -326,6 +381,10 @@ if missing:
     st.sidebar.warning(
         f"Not yet ingested: {', '.join(missing)}. Click below to fetch from SEC."
     )
+
+generate_clicked = st.sidebar.button(
+    "Generate Report", type="primary", disabled=not selected, key="gen_report_btn"
+)
 
 # --- Similar-company suggestions ---
 @st.cache_data(ttl=300)
@@ -390,7 +449,15 @@ if selected and not sec_df.empty:
                 "or seed the universe via `python scripts/seed_universe_embeddings.py`."
             )
         else:
-            ranked = embedding_peers(anchor, emb_df, top_k=15)
+            top_k = st.slider(
+                "How many peers to show",
+                min_value=10, max_value=100, value=25, step=5,
+                key="peer_top_k",
+                help="Cosine similarity is symmetric, but a fixed cutoff isn't — "
+                     "if A has many close neighbors, B may sit just outside A's top-N "
+                     "even when A is in B's top-N. Widen the list to see more.",
+            )
+            ranked = embedding_peers(anchor, emb_df, top_k=top_k)
             if ranked.empty:
                 st.info("No other ingested tickers to compare against yet.")
             else:
@@ -476,23 +543,37 @@ with st.sidebar.expander("Peer universe", expanded=False):
         f"Precomputed 10-K Item 1 embeddings used for peer ranking. "
         f"Currently: **{len(emb_df)}** companies."
     )
+    index_label = st.radio(
+        "Index",
+        options=["S&P 500 (~500)", "NASDAQ-100 (~100)", "S&P 500 + NASDAQ-100 (~570)"],
+        index=0,
+        help="Which universe to pull from. Combined catches tech names like SNOW/MDB that aren't in the S&P 500.",
+    )
+    index_arg = {
+        "S&P 500 (~500)": "sp500",
+        "NASDAQ-100 (~100)": "nasdaq100",
+        "S&P 500 + NASDAQ-100 (~570)": "sp500+nasdaq100",
+    }[index_label]
+
     seed_scope = st.radio(
         "Seed scope",
-        options=["Quick (20)", "Broad (100)", "Full S&P 500 (~500)"],
+        options=["Quick smoke test (20)", "Broad (100)", "Full index"],
         index=0,
         help="Each ticker takes ~5–10s due to SEC rate limits. Start small to verify.",
     )
-    scope_limit = {"Quick (20)": 20, "Broad (100)": 100, "Full S&P 500 (~500)": None}[seed_scope]
+    scope_limit = {"Quick smoke test (20)": 20, "Broad (100)": 100, "Full index": None}[seed_scope]
 
     if st.button("Start seeding", key="seed_btn"):
-        with st.status(f"Seeding peer universe ({seed_scope})…", expanded=True) as seed_status:
+        with st.status(f"Seeding {index_label} ({seed_scope})…", expanded=True) as seed_status:
             seed_progress = st.progress(0.0)
             seed_text = st.empty()
             seed_log = None
             if dev_mode:
                 with st.expander("Seed log", expanded=False):
                     seed_log = st.empty()
-            rc, output, done, total = run_seed_script(scope_limit, seed_progress, seed_text, seed_log)
+            rc, output, done, total = run_seed_script(
+                index_arg, scope_limit, seed_progress, seed_text, seed_log
+            )
             if rc == 0:
                 summary_line = next(
                     (line for line in output.splitlines() if line.strip().startswith("embedded:")),
@@ -507,8 +588,8 @@ with st.sidebar.expander("Peer universe", expanded=False):
                 seed_status.update(label="Seed failed", state="error")
                 seed_text.error(f"✗ Seed failed (exit {rc}). Turn on Developer mode for the full log.")
 
-if st.sidebar.button("Generate Report", type="primary", disabled=not selected):
-    write_tickers_csv(selected)
+if generate_clicked:
+    write_selected_tickers(selected)
     with st.status("Running pipeline…", expanded=True) as status:
         progress_bar = st.progress(0.0)
         status_text = st.empty()
